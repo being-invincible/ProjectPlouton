@@ -1,0 +1,19 @@
+# Core
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0
+
+# Data & Analysis
+pandas>=2.0
+numpy>=1.24
+yfinance>=0.2.30
+
+# HTTP client (for PocketBase REST API)
+httpx>=0.25
+
+# OLAP Analytics
+duckdb>=1.0
+
+# Note: Technical indicators (VWAP, Fibonacci, swing points) are
+# implemented manually in strategy/indicators.py using pandas/numpy.
+# No pandas-ta or TA-Lib dependency needed.

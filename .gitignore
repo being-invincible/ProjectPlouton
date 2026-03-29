@@ -1,0 +1,46 @@
+# macOS
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+backend_log.txt
+frontend_log.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / React / Vite
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.npm/
+
+# IDE
+.vscode/
+.idea/
+
+# Databases and runtime state
+*.sqlite
+*.sqlite3
+*.db
+*.duckdb
+*.duckdb.wal
+pocketbase/pb_data/
