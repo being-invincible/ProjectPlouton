@@ -201,7 +201,7 @@ Also documented at `docs/hyperliquid-mechanics.md` for reference outside the app
 
 ## Chart Generation
 
-Library: `plotly` → `kaleido` for PNG export (1000×600px)
+Library: `plotly` → `kaleido` for PNG export (1600×800px — wide for plenty of candle context)
 
 ### Visual Spec (matches TradingView Fibonacci tool)
 
@@ -254,7 +254,19 @@ Library: `plotly` → `kaleido` for PNG export (1000×600px)
 | Labels | LEFT axis: `ratio (price)` format, e.g. `0.618 (78,316.9)` |
 | Title bar | `SOL/USDC · 5m · Golden Pocket Long · Confidence 72%` |
 
-Chart spans: 100 candles before signal + 20 after (right margin for trade box).
+**Candle range (configurable via Settings page):**
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `chart_candles_before_signal` | 400 | Historical context — see how trend formed, prior structure, S/R, prior reversals at similar levels |
+| `chart_candles_after_signal` | 100 | Forward room for trade progression and exit marker |
+| **Total visible** | **~500 candles** | Roughly 41 hours on 5m, 5 days on 15m, 20 days on 1h |
+
+Why this much: a few hundred candles lets you spot pattern repetitions, prior golden pocket reactions, divergences in trend structure — context that's invaluable when reviewing trades later to spot what the bot got right or wrong. If a coin is reacting differently than the strategy expects, you can see it in the chart.
+
+**Density management:** With 500 candles on a 1600px wide chart, each candle gets ~3px which is the TradingView default density. Still readable.
+
+**Settings tooltip** for these fields: "How many candles to show in the trade chart. More = more context for spotting patterns, less = bigger candles. 500 is a good balance."
 
 ### Chart Snapshots
 
@@ -367,6 +379,8 @@ MIN_CONFIDENCE_PCT=60              # signals below this don't fire
 EXECUTION_TF_DEFAULT=5m            # 15m used when 1h slope is strong
 ATR_PERIOD=14
 ATR_SL_MULTIPLIER=1.5
+CHART_CANDLES_BEFORE_SIGNAL=400    # historical context in trade charts
+CHART_CANDLES_AFTER_SIGNAL=100     # forward room for trade progression
 
 # Removed
 # INSTRUMENT=GC=F                  (replaced by COINS list)
