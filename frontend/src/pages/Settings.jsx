@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Save, RotateCcw, DollarSign, CheckCircle, Info, Coins, Bot, Activity } from 'lucide-react';
 import api from '../lib/api';
+import HelpTooltip from '../components/HelpTooltip';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { InputField, Input, Select } from '../components/ui/Input';
