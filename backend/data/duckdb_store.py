@@ -671,6 +671,36 @@ class DuckDBStore:
         ])
         return trade_id
 
+    def insert_trade(self, row: dict) -> None:
+        """Insert a trade row — accepts any subset of valid trade columns."""
+        import json
+        # Serialize dict values (e.g. signal_metadata) to JSON strings
+        processed = {}
+        for k, v in row.items():
+            if isinstance(v, dict):
+                processed[k] = json.dumps(v)
+            else:
+                processed[k] = v
+        cols = list(processed.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_list = ", ".join(cols)
+        values = [processed[c] for c in cols]
+        self.conn.execute(f"INSERT INTO trades ({col_list}) VALUES ({placeholders})", values)
+
+    def list_open_trades(self) -> list[dict]:
+        """Return all open trades as list of dicts."""
+        df = self.conn.execute("SELECT * FROM trades WHERE status = 'OPEN' ORDER BY timestamp").fetchdf()
+        if df.empty:
+            return []
+        return df.to_dict("records")
+
+    def list_all_trades(self) -> list[dict]:
+        """Return all trades as list of dicts."""
+        df = self.conn.execute("SELECT * FROM trades ORDER BY timestamp").fetchdf()
+        if df.empty:
+            return []
+        return df.to_dict("records")
+
     def update_trade(self, trade_id: str, data: dict) -> None:
         """Update a trade record."""
         sets = []
