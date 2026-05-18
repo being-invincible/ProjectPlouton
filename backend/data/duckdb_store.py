@@ -46,6 +46,7 @@ class DuckDBStore:
         self.conn = duckdb.connect(db_path, read_only=read_only)
         if not read_only:
             self._create_tables()
+            self._migrate_v2()
         logger.info(f"DuckDB store opened: {db_path}")
 
     def _create_tables(self) -> None:
@@ -174,6 +175,38 @@ class DuckDBStore:
                     '{"lookback_period": 20, "entry_levels": [0.382, 0.618], "stop_loss_level": 0.786, "risk_reward_ratio": 2.0, "timeframe": "5m", "risk_per_trade_pct": 1.0, "max_open_positions": 3, "max_daily_loss_pct": 5.0}'
                 )
             """)
+
+    def _migrate_v2(self) -> None:
+        """Idempotent migration to v2 schema — confidence, chart blobs, asset_class default."""
+        cols = self.conn.execute("PRAGMA table_info(trades)").fetchdf()
+        existing = set(cols["name"].tolist()) if not cols.empty else set()
+
+        if "confidence" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN confidence DOUBLE DEFAULT 0.0")
+        if "chart_initial_png" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN chart_initial_png BLOB")
+        if "chart_final_png" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN chart_final_png BLOB")
+        if "tp1_price" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN tp1_price DOUBLE")
+        if "tp2_price" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN tp2_price DOUBLE")
+        if "tp1_hit" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN tp1_hit BOOLEAN DEFAULT FALSE")
+        if "leverage" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN leverage DOUBLE DEFAULT 1.0")
+        if "notional" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN notional DOUBLE DEFAULT 0.0")
+        if "initial_margin" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN initial_margin DOUBLE DEFAULT 0.0")
+        if "liquidation_price" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN liquidation_price DOUBLE")
+        if "funding_rate_hr" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN funding_rate_hr DOUBLE")
+
+        self.conn.execute(
+            "UPDATE candles SET asset_class = 'crypto' WHERE asset_class IS NULL OR asset_class = 'futures'"
+        )
 
     # ── Candle Operations ────────────────────────────────────────
 
