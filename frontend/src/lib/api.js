@@ -90,6 +90,10 @@ const api = {
     const res = await fetch(`${API_BASE}/health`);
     return res.json();
   },
+
+  tradeChartUrl(id, type = 'final') {
+    return `${API_BASE}/trades/${id}/chart?type=${type}`;
+  },
 };
 
 export default api;
