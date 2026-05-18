@@ -22,6 +22,7 @@ kaleido==0.2.1  # plotly PNG export — pin: 1.0+ has known issues
 
 # Notifications
 aiohttp>=3.9
+pytest-asyncio>=0.23
 
 # Util
 python-dateutil>=2.9
