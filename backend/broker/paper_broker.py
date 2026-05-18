@@ -1,154 +1,113 @@
-"""
-Paper Broker — local trading simulator.
-
-Simulates order execution with configurable slippage.
-Maintains an in-memory portfolio starting with $500 (configurable).
-All trades are recorded to PocketBase.
-"""
+"""Paper broker for Hermes v2 — tracks notional, simulates two-stage TP, BE move after TP1."""
 
 import logging
-import random
-from typing import Optional
-
-from broker.base import Broker, Position
-from config import settings
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
-class PaperBroker(Broker):
-    """Local paper trading simulator."""
+@dataclass
+class PaperPosition:
+    trade_id: str
+    coin: str
+    direction: str               # LONG / SHORT
+    entry_price: float
+    quantity: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    initial_quantity: float      # original size before TP1 partial
+    notional: float
+    leverage: int
+    initial_margin: float
+    liquidation_price: float
+    funding_rate_hr: float
+    tp1_hit: bool = False
+    opened_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def __init__(
-        self,
-        initial_balance: float | None = None,
-        slippage_pct: float = 0.05,
-    ):
-        """
-        Args:
-            initial_balance: Starting balance (default: from settings, $500)
-            slippage_pct: Simulated slippage percentage (0.05 = 0.05%)
-        """
-        self.initial_balance = initial_balance or settings.paper_balance
-        self.balance = self.initial_balance
-        self.slippage_pct = slippage_pct
-        self.positions: list[Position] = []
-        self._connected = False
+
+class PaperBroker:
+    def __init__(self, initial_balance: float):
+        self.initial_balance = initial_balance
+        self.balance = initial_balance
+        self.positions: Dict[str, PaperPosition] = {}
 
     async def connect(self) -> None:
-        """Initialize the paper broker."""
-        self._connected = True
-        logger.info(
-            f"📝 Paper broker connected | "
-            f"Balance: ${self.balance:.2f} | "
-            f"Slippage: {self.slippage_pct}%"
-        )
+        logger.info(f"Paper broker connected — balance ${self.balance:.2f}")
 
     async def disconnect(self) -> None:
-        """Disconnect paper broker."""
-        self._connected = False
-        logger.info("📝 Paper broker disconnected")
+        logger.info("Paper broker disconnected")
 
-    async def place_order(
-        self,
-        direction: str,
-        quantity: float,
-        price: float,
-        stop_loss: float,
-        take_profit: float,
-    ) -> float:
-        """
-        Simulate order execution with slippage.
-
-        Returns the simulated fill price.
-        """
-        # Simulate slippage
-        slippage = price * (self.slippage_pct / 100)
-        if direction == "LONG":
-            fill_price = price + (slippage * random.uniform(0, 1))
-        else:
-            fill_price = price - (slippage * random.uniform(0, 1))
-
-        fill_price = round(fill_price, 2)
-
-        # Track position
-        position = Position(
-            instrument=settings.instrument,
-            direction=direction,
-            quantity=quantity,
-            entry_price=fill_price,
-            current_price=fill_price,
-            unrealized_pnl=0.0,
+    def open_position(self, *, coin: str, direction: str, entry: float, quantity: float,
+                      stop_loss: float, tp1: float, tp2: float, notional: float, leverage: int,
+                      initial_margin: float, liquidation_price: float, funding_rate_hr: float) -> str:
+        trade_id = str(uuid.uuid4())
+        self.positions[trade_id] = PaperPosition(
+            trade_id=trade_id, coin=coin, direction=direction, entry_price=entry,
+            quantity=quantity, initial_quantity=quantity, stop_loss=stop_loss, tp1=tp1, tp2=tp2,
+            notional=notional, leverage=leverage, initial_margin=initial_margin,
+            liquidation_price=liquidation_price, funding_rate_hr=funding_rate_hr,
         )
-        self.positions.append(position)
+        logger.info(f"OPENED {direction} {coin} qty={quantity:.4f} entry={entry:.4f} SL={stop_loss:.4f}")
+        return trade_id
 
-        logger.info(
-            f"📝 Paper order filled: {direction} {quantity} "
-            f"@ ${fill_price:.2f} (slippage: ${abs(fill_price - price):.2f})"
-        )
+    def check_exits(self, coin: str, current_price: float) -> list[tuple[str, str, float, float]]:
+        """Returns list of (trade_id, exit_reason, exit_price, realized_pnl) for closures this tick."""
+        closures = []
+        for trade_id, pos in list(self.positions.items()):
+            if pos.coin != coin:
+                continue
 
-        return fill_price
+            # SL check first (worst case)
+            if pos.direction == "LONG" and current_price <= pos.stop_loss:
+                pnl = (pos.stop_loss - pos.entry_price) * pos.quantity
+                closures.append((trade_id, "SL", pos.stop_loss, pnl))
+                self._close_full(trade_id, pnl)
+                continue
+            if pos.direction == "SHORT" and current_price >= pos.stop_loss:
+                pnl = (pos.entry_price - pos.stop_loss) * pos.quantity
+                closures.append((trade_id, "SL", pos.stop_loss, pnl))
+                self._close_full(trade_id, pnl)
+                continue
 
-    async def close_position(
-        self,
-        direction: str,
-        quantity: float,
-        price: float,
-    ) -> float:
-        """Simulate closing a position."""
-        # Simulate slippage on exit
-        slippage = price * (self.slippage_pct / 100)
-        if direction == "LONG":
-            # Selling to close long — slippage works against us
-            fill_price = price - (slippage * random.uniform(0, 1))
-        else:
-            # Buying to close short — slippage works against us
-            fill_price = price + (slippage * random.uniform(0, 1))
+            # TP1 — partial close 50%, move SL to BE
+            if not pos.tp1_hit:
+                hit_tp1 = (pos.direction == "LONG" and current_price >= pos.tp1) or \
+                          (pos.direction == "SHORT" and current_price <= pos.tp1)
+                if hit_tp1:
+                    half = pos.initial_quantity * 0.5
+                    if pos.direction == "LONG":
+                        pnl_partial = (pos.tp1 - pos.entry_price) * half
+                    else:
+                        pnl_partial = (pos.entry_price - pos.tp1) * half
+                    pos.quantity -= half
+                    pos.tp1_hit = True
+                    pos.stop_loss = pos.entry_price  # move to BE
+                    self.balance += pnl_partial
+                    closures.append((trade_id, "TP1_PARTIAL", pos.tp1, pnl_partial))
 
-        fill_price = round(fill_price, 2)
-
-        # Remove from tracked positions (first match)
-        for i, pos in enumerate(self.positions):
-            if pos.direction == direction and pos.quantity == quantity:
-                # Calculate P&L
-                if direction == "LONG":
-                    pnl = (fill_price - pos.entry_price) * quantity
+            # TP2 — close remainder
+            hit_tp2 = (pos.direction == "LONG" and current_price >= pos.tp2) or \
+                      (pos.direction == "SHORT" and current_price <= pos.tp2)
+            if hit_tp2:
+                if pos.direction == "LONG":
+                    pnl = (pos.tp2 - pos.entry_price) * pos.quantity
                 else:
-                    pnl = (pos.entry_price - fill_price) * quantity
+                    pnl = (pos.entry_price - pos.tp2) * pos.quantity
+                closures.append((trade_id, "TP2", pos.tp2, pnl))
+                self._close_full(trade_id, pnl)
+        return closures
 
-                self.balance += pnl
-                self.positions.pop(i)
+    def _close_full(self, trade_id: str, pnl: float) -> None:
+        pos = self.positions.pop(trade_id, None)
+        if pos is None:
+            return
+        self.balance += pnl
+        logger.info(f"CLOSED {pos.direction} {pos.coin} pnl=${pnl:.2f} balance=${self.balance:.2f}")
 
-                logger.info(
-                    f"📝 Paper position closed: {direction} {quantity} "
-                    f"@ ${fill_price:.2f} | P&L: ${pnl:+.2f} | "
-                    f"Balance: ${self.balance:.2f}"
-                )
-                break
-
-        return fill_price
-
-    async def get_positions(self) -> list[Position]:
-        """Return all open paper positions."""
-        return self.positions.copy()
-
-    async def get_account_balance(self) -> float:
-        """Return current paper balance."""
-        return self.balance
-
-    def is_connected(self) -> bool:
-        """Check if paper broker is initialized."""
-        return self._connected
-
-    def update_positions(self, current_price: float) -> None:
-        """Update unrealized P&L for all open positions."""
-        for pos in self.positions:
-            pos.current_price = current_price
-            if pos.direction == "LONG":
-                pos.unrealized_pnl = (
-                    (current_price - pos.entry_price) * pos.quantity
-                )
-            else:
-                pos.unrealized_pnl = (
-                    (pos.entry_price - current_price) * pos.quantity
-                )
+    def update_positions(self, coin: str, current_price: float) -> list[tuple[str, str, float, float]]:
+        """Convenience entry — same as check_exits."""
+        return self.check_exits(coin, current_price)
