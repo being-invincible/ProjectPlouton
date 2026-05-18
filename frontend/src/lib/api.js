@@ -49,7 +49,7 @@ const api = {
   },
 
   /** Fetch candles for a given timeframe */
-  async getCandles(instrument = 'GC=F', timeframe = '5m', limit = 500) {
+  async getCandles(instrument = 'BTC', timeframe = '5m', limit = 500) {
     const params = new URLSearchParams({ instrument, timeframe, limit });
     const res = await fetch(`${API_BASE}/candles?${params}`);
     return res.json();
@@ -74,7 +74,7 @@ const api = {
   },
 
   /** Fetch MTF trend analysis */
-  async getMtfTrend(instrument = 'GC=F') {
+  async getMtfTrend(instrument = 'BTC') {
     const res = await fetch(`${API_BASE}/mtf_trend?instrument=${instrument}`);
     return res.json();
   },

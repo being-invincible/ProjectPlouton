@@ -10,7 +10,7 @@ import { Badge } from '../components/ui/Badge';
 
 export default function Settings() {
   const [balance, setBalance] = useState(500);
-  const [instrument, setInstrument] = useState('GC=F');
+  const [instrument, setInstrument] = useState('BTC');
   const [tradingMode, setTradingMode] = useState('paper');
   const [forceMarketOpen, setForceMarketOpen] = useState(false);
   const [botState, setBotState] = useState({});
@@ -39,7 +39,7 @@ export default function Settings() {
 
       if (settingsState && Object.keys(settingsState).length > 0) {
         setBalance(settingsState.balance ?? 500);
-        setInstrument(settingsState.instrument || 'GC=F');
+        setInstrument(settingsState.instrument || 'BTC');
         setTradingMode((settingsState.trading_mode || 'paper').toLowerCase());
         setForceMarketOpen(Boolean(settingsState.force_market_open));
       }
@@ -64,7 +64,7 @@ export default function Settings() {
   }
 
   function handleReset() {
-    setInstrument('GC=F');
+    setInstrument('BTC');
     setBalance(500);
     setTradingMode('paper');
     setForceMarketOpen(false);
