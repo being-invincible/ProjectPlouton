@@ -21,7 +21,6 @@ from fastapi.responses import JSONResponse, Response
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from data.duckdb_store import DuckDBStore
-from data.market_data import MarketDataFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -144,18 +143,15 @@ async def get_runtime():
         and status in {"RUNNING", "WAITING"}
     )
 
-    force_open = bool(state.get("force_market_open", False))
-    market_info = MarketDataFetcher.get_market_hours_display(force_market_open=force_open)
-
     return _clean({
         "bot_alive": bot_alive,
         "heartbeat_age_sec": heartbeat_age_sec,
         "alive_threshold_sec": alive_threshold_sec,
         "last_heartbeat": heartbeat,
-        "market_actual_open": market_info.get("actual_open", False),
-        "market_effective_open": market_info.get("is_open", False),
-        "force_market_open": force_open,
-        "market_display": market_info.get("next_event", ""),
+        "market_actual_open": True,
+        "market_effective_open": True,
+        "force_market_open": True,
+        "market_display": "Crypto perpetuals — 24/7",
     })
 
 
@@ -164,7 +160,7 @@ async def get_settings_state():
     store = get_store()
     state = store.get_bot_state() or {}
     return _clean({
-        "instrument": state.get("instrument", "GC=F"),
+        "instrument": state.get("instrument", "BTC"),
         "balance": state.get("balance", 500.0),
         "trading_mode": state.get("trading_mode", "paper"),
         "force_market_open": state.get("force_market_open", False),
@@ -202,7 +198,7 @@ async def patch_settings(payload: SettingsPatch):
 
 @app.get("/api/candles")
 async def get_candles(
-    instrument: str = "GC=F",
+    instrument: str = "BTC",
     timeframe: str = "5m",
     limit: int = 500,
 ):
