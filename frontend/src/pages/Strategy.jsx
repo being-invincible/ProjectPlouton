@@ -8,6 +8,17 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription, Separator } 
 import { Button } from '../components/ui/Button';
 import { InputField, Input } from '../components/ui/Input';
 import { Badge } from '../components/ui/Badge';
+import HelpTooltip from '../components/HelpTooltip';
+
+const PARAM_TOOLTIPS = {
+  risk_per_trade_pct: 'Percentage of balance risked per trade. Default 3% means a losing trade at SL costs 3% of balance.',
+  max_daily_loss_pct: 'Bot pauses 24h if total losses today exceed this % of balance. Default 15%.',
+  max_open_positions: 'Maximum concurrent trades across all coins.',
+  entry_levels: 'Fibonacci levels where the bot looks for entries. Golden Pocket = 50%–61.8% retracement zone.',
+  stop_loss_level: 'Fib level beyond which the swing is invalidated. 78.6% is the standard golden pocket SL.',
+  risk_reward_ratio: 'Target profit vs risk. 1.5 = earn $1.50 per $1 risked at TP1.',
+  timeframe: 'Candle size for analysis. Bot auto-upgrades to 15m when 1h trend slope is unusually strong.',
+};
 
 export default function Strategy() {
   const [strategies, setStrategies] = useState([]);
@@ -280,7 +291,16 @@ export default function Strategy() {
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                             {Object.entries(cat.params).map(([key, val]) => (
-                              <InputField key={key} label={formatParamLabel(key)} accentColor={cat.color}>
+                              <InputField
+                                key={key}
+                                label={
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                    {formatParamLabel(key)}
+                                    {PARAM_TOOLTIPS[key] && <HelpTooltip text={PARAM_TOOLTIPS[key]} />}
+                                  </span>
+                                }
+                                accentColor={cat.color}
+                              >
                                 <Input
                                   value={Array.isArray(val) ? val.join(', ') : String(editParams[key] ?? val)}
                                   onChange={e => updateParam(key, e.target.value)}
