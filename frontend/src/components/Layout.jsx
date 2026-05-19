@@ -118,13 +118,13 @@ export default function Layout() {
             }}>
               <img
                 src="/hermes-logo.webp"
-                alt="Project Hermes logo"
+                alt="Plouton logo"
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
             </div>
             <div>
               <h1 style={{ fontSize: '16px', fontWeight: 700, letterSpacing: '-0.025em', color: '#f8fafc' }}>
-                Project Hermes
+                Plouton
               </h1>
               <p style={{ fontSize: '11px', fontWeight: 500, color: '#475569', marginTop: '1px' }}>
                 Automated trading bot

@@ -24,7 +24,7 @@ from data.duckdb_store import DuckDBStore
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="TradingBot API", version="2.0")
+app = FastAPI(title="Plouton API", version="2.0")
 
 # CORS for the React dev server
 app.add_middleware(

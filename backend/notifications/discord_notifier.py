@@ -52,7 +52,7 @@ class DiscordNotifier:
                 {"name": "Swing", "value": strategy_summary, "inline": False},
             ],
             "image": {"url": "attachment://chart.png"},
-            "footer": {"text": f"Paper trade · Hermes v2 · Balance ${balance:.2f}"},
+            "footer": {"text": f"Paper trade · Plouton · Balance ${balance:.2f}"},
         }
         await self._post(payload={"embeds": [embed]}, png_bytes=png_bytes)
 
@@ -86,7 +86,7 @@ class DiscordNotifier:
                 {"name": "Confidence (at entry)", "value": f"{confidence_at_entry:.0f}%", "inline": True},
             ],
             "image": {"url": "attachment://chart.png"},
-            "footer": {"text": "Hermes v2"},
+            "footer": {"text": "Plouton"},
         }
         await self._post(payload={"embeds": [embed]}, png_bytes=png_bytes)
 

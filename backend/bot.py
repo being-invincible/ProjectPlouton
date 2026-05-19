@@ -1,4 +1,4 @@
-"""Hermes v2 main bot loop — async 10-coin crypto scanner."""
+"""Plouton main bot loop — async 10-coin crypto scanner."""
 
 import asyncio
 import logging
@@ -27,7 +27,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("Hermes")
+logger = logging.getLogger("Plouton")
 
 
 async def main() -> None:
@@ -68,7 +68,7 @@ async def main() -> None:
         "last_updated": datetime.now(timezone.utc).isoformat(),
     })
 
-    logger.info(f"Hermes v2 started — coins: {', '.join(settings.coins)}")
+    logger.info(f"Plouton started — coins: {', '.join(settings.coins)}")
 
     try:
         while True:
