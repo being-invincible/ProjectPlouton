@@ -18,7 +18,7 @@ export default function Chart() {
   const chartRef = useRef(null);
   const [candles, setCandles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [instrument, setInstrument] = useState('GC=F');
+  const [instrument, setInstrument] = useState('BTC');
   const [timeframe, setTimeframe] = useState('5m');
   const [mtfTrend, setMtfTrend] = useState(null);
 

@@ -46,6 +46,7 @@ class DuckDBStore:
         self.conn = duckdb.connect(db_path, read_only=read_only)
         if not read_only:
             self._create_tables()
+            self._migrate_v2()
         logger.info(f"DuckDB store opened: {db_path}")
 
     def _create_tables(self) -> None:
@@ -174,6 +175,38 @@ class DuckDBStore:
                     '{"lookback_period": 20, "entry_levels": [0.382, 0.618], "stop_loss_level": 0.786, "risk_reward_ratio": 2.0, "timeframe": "5m", "risk_per_trade_pct": 1.0, "max_open_positions": 3, "max_daily_loss_pct": 5.0}'
                 )
             """)
+
+    def _migrate_v2(self) -> None:
+        """Idempotent migration to v2 schema — confidence, chart blobs, asset_class default."""
+        cols = self.conn.execute("PRAGMA table_info(trades)").fetchdf()
+        existing = set(cols["name"].tolist()) if not cols.empty else set()
+
+        if "confidence" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN confidence DOUBLE DEFAULT 0.0")
+        if "chart_initial_png" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN chart_initial_png BLOB")
+        if "chart_final_png" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN chart_final_png BLOB")
+        if "tp1_price" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN tp1_price DOUBLE")
+        if "tp2_price" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN tp2_price DOUBLE")
+        if "tp1_hit" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN tp1_hit BOOLEAN DEFAULT FALSE")
+        if "leverage" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN leverage DOUBLE DEFAULT 1.0")
+        if "notional" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN notional DOUBLE DEFAULT 0.0")
+        if "initial_margin" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN initial_margin DOUBLE DEFAULT 0.0")
+        if "liquidation_price" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN liquidation_price DOUBLE")
+        if "funding_rate_hr" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN funding_rate_hr DOUBLE")
+
+        self.conn.execute(
+            "UPDATE candles SET asset_class = 'crypto' WHERE asset_class IS NULL OR asset_class = 'futures'"
+        )
 
     # ── Candle Operations ────────────────────────────────────────
 
@@ -637,6 +670,36 @@ class DuckDBStore:
             data.get("asset_class", "futures"),
         ])
         return trade_id
+
+    def insert_trade(self, row: dict) -> None:
+        """Insert a trade row — accepts any subset of valid trade columns."""
+        import json
+        # Serialize dict values (e.g. signal_metadata) to JSON strings
+        processed = {}
+        for k, v in row.items():
+            if isinstance(v, dict):
+                processed[k] = json.dumps(v)
+            else:
+                processed[k] = v
+        cols = list(processed.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_list = ", ".join(cols)
+        values = [processed[c] for c in cols]
+        self.conn.execute(f"INSERT INTO trades ({col_list}) VALUES ({placeholders})", values)
+
+    def list_open_trades(self) -> list[dict]:
+        """Return all open trades as list of dicts."""
+        df = self.conn.execute("SELECT * FROM trades WHERE status = 'OPEN' ORDER BY timestamp").fetchdf()
+        if df.empty:
+            return []
+        return df.to_dict("records")
+
+    def list_all_trades(self) -> list[dict]:
+        """Return all trades as list of dicts."""
+        df = self.conn.execute("SELECT * FROM trades ORDER BY timestamp").fetchdf()
+        if df.empty:
+            return []
+        return df.to_dict("records")
 
     def update_trade(self, trade_id: str, data: dict) -> None:
         """Update a trade record."""

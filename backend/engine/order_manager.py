@@ -1,194 +1,153 @@
-"""
-Order Manager — executes validated orders through the broker adapter.
-
-Handles:
-- Placing orders via the broker interface
-- Recording trades in DuckDB
-- Updating bot state (balance, trade counts)
-"""
+"""OrderManager — wires Signal → PaperBroker, persists chart blobs and bot state."""
 
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from strategy.base import Signal
-from engine.risk_manager import ValidatedOrder
-from broker.base import Broker
-
 logger = logging.getLogger(__name__)
 
 
 class OrderManager:
-    """Manages order execution and trade recording."""
-
-    def __init__(self, broker: Broker, duckdb_store=None):
+    def __init__(self, *, broker, duckdb_store, discord, chart_generator, fetcher):
         self.broker = broker
-        self._db = duckdb_store
+        self.store = duckdb_store
+        self.discord = discord
+        self.chart_generator = chart_generator
+        self.fetcher = fetcher
 
-    async def execute(self, order: ValidatedOrder) -> Optional[str]:
-        """
-        Execute a validated order through the broker.
+    async def execute_with_chart(self, *, signal, position, confidence: float, chart_png: bytes) -> str:
+        """Open paper position, persist trade row including chart blob."""
+        trade_id = self.broker.open_position(
+            coin=signal.coin, direction=signal.direction, entry=signal.entry_price,
+            quantity=position.quantity, stop_loss=signal.stop_loss,
+            tp1=signal.tp1, tp2=signal.tp2,
+            notional=position.notional, leverage=position.suggested_leverage,
+            initial_margin=position.initial_margin, liquidation_price=position.liquidation_price,
+            funding_rate_hr=position.funding_rate_hr,
+        )
 
-        Returns:
-            Trade record ID if successful, None if failed
-        """
-        signal = order.signal
+        self.store.insert_trade({
+            "id": trade_id,
+            "instrument": signal.coin,
+            "direction": signal.direction,
+            "entry_price": signal.entry_price,
+            "stop_loss": signal.stop_loss,
+            "take_profit": signal.tp2,
+            "tp1_price": signal.tp1,
+            "tp2_price": signal.tp2,
+            "tp1_hit": False,
+            "quantity": position.quantity,
+            "status": "OPEN",
+            "timestamp": signal.timestamp.isoformat(),
+            "strategy_name": "golden_pocket",
+            "confidence": confidence,
+            "leverage": position.suggested_leverage,
+            "notional": position.notional,
+            "initial_margin": position.initial_margin,
+            "liquidation_price": position.liquidation_price,
+            "funding_rate_hr": position.funding_rate_hr,
+            "chart_initial_png": chart_png,
+        })
 
-        try:
-            # Place order with broker
-            fill_price = await self.broker.place_order(
-                direction=signal.direction,
-                quantity=order.quantity,
-                price=signal.entry_price,
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
-            )
+        self._update_bot_state()
+        return trade_id
 
-            # Record the trade in DuckDB
-            trade_id = "unknown"
-            if self._db:
-                trade_id = self._db.create_trade({
-                    "timestamp": signal.timestamp,
-                    "instrument": signal.instrument,
-                    "direction": signal.direction,
-                    "entry_price": fill_price,
-                    "quantity": order.quantity,
-                    "stop_loss": signal.stop_loss,
-                    "take_profit": signal.take_profit,
-                    "status": "OPEN",
-                    "strategy_name": signal.strategy,
-                })
+    async def check_open_trades(self) -> None:
+        """Fetch current price for each coin with open trades, check exits, persist closures with chart."""
+        open_trades = self.store.list_open_trades()
+        coins_with_open = {t["instrument"] for t in open_trades}
 
-                # Update bot state
-                self._update_bot_state_trade_opened()
+        for coin in coins_with_open:
+            try:
+                df = self.fetcher.fetch_ohlcv(coin, "5m", limit=1)
+            except Exception as e:
+                logger.warning(f"check_open_trades fetch failed for {coin}: {e}")
+                continue
+            current_price = float(df["Close"].iloc[-1])
 
-            logger.info(
-                f"Trade opened: {signal.direction} {order.quantity} "
-                f"@ {fill_price:.2f} | ID: {trade_id}"
-            )
-            return trade_id
+            closures = self.broker.check_exits(coin, current_price)
+            for trade_id, reason, exit_price, pnl in closures:
+                if reason == "TP1_PARTIAL":
+                    self.store.update_trade(trade_id, {"tp1_hit": True, "stop_loss": exit_price})
+                    continue
 
-        except Exception as e:
-            logger.error(f"Failed to execute order: {e}")
-            return None
+                trade = self.store.get_trade(trade_id)
+                final_chart = await self._regenerate_chart_for_trade(trade, exit_price, reason)
 
-    async def check_and_close_trades(self, current_price: float) -> None:
-        """
-        Check all open trades for stop loss or take profit hits.
-        """
-        if not self._db:
-            return
+                pnl_pct = (pnl / float(trade.get("initial_margin", 1.0))) * 100 if trade.get("initial_margin") else 0.0
 
-        try:
-            open_trades = self._db.get_open_trades()
-        except Exception as e:
-            logger.error(f"Failed to fetch open trades: {e}")
-            return
-
-        for trade in open_trades:
-            direction = trade["direction"]
-            stop_loss = trade["stop_loss"]
-            take_profit = trade["take_profit"]
-
-            exit_reason = None
-
-            if direction == "LONG":
-                if current_price <= stop_loss:
-                    exit_reason = "SL_HIT"
-                elif current_price >= take_profit:
-                    exit_reason = "TP_HIT"
-            else:  # SHORT
-                if current_price >= stop_loss:
-                    exit_reason = "SL_HIT"
-                elif current_price <= take_profit:
-                    exit_reason = "TP_HIT"
-
-            if exit_reason:
-                await self._close_trade(trade, current_price, exit_reason)
-
-    async def _close_trade(
-        self,
-        trade: dict,
-        exit_price: float,
-        exit_reason: str,
-    ) -> None:
-        """Close an open trade and update records."""
-        entry_price = trade["entry_price"]
-        quantity = trade["quantity"]
-        direction = trade["direction"]
-
-        # Calculate P&L
-        if direction == "LONG":
-            pnl = (exit_price - entry_price) * quantity
-        else:
-            pnl = (entry_price - exit_price) * quantity
-
-        now = datetime.now(timezone.utc).isoformat()
-
-        try:
-            # Update trade record in DuckDB
-            if self._db:
-                self._db.update_trade(trade["id"], {
-                    "exit_price": exit_price,
-                    "pnl": round(pnl, 2),
+                self.store.update_trade(trade_id, {
                     "status": "CLOSED",
-                    "exit_timestamp": now,
-                    "exit_reason": exit_reason,
+                    "exit_price": exit_price,
+                    "exit_reason": reason,
+                    "pnl": pnl,
+                    "chart_final_png": final_chart,
                 })
 
-                # Update bot state
-                self._update_bot_state_trade_closed(pnl)
+                duration = self._format_duration(trade.get("timestamp"))
+                await self.discord.send_close(
+                    coin=trade["instrument"], direction=trade["direction"],
+                    pnl=pnl, pnl_pct=pnl_pct, exit_reason=reason,
+                    confidence_at_entry=float(trade.get("confidence", 0)),
+                    duration_str=duration, png_bytes=final_chart or b"",
+                )
 
-            # Close position with broker
-            await self.broker.close_position(
-                direction=direction,
-                quantity=quantity,
-                price=exit_price,
-            )
+        self._update_bot_state()
 
-            result = "WIN" if pnl >= 0 else "LOSS"
-            logger.info(
-                f"[{result}] Trade closed ({exit_reason}): "
-                f"{direction} @ {exit_price:.2f} | "
-                f"P&L: ${pnl:+.2f}"
-            )
+    async def _regenerate_chart_for_trade(self, trade: dict, exit_price: float, reason: str) -> bytes:
+        from backend.strategy.golden_pocket import Signal
+        import pandas as pd
 
-        except Exception as e:
-            logger.error(f"Failed to close trade {trade['id']}: {e}")
-
-    def _update_bot_state_trade_opened(self) -> None:
-        """Increment total_trades counter in bot state."""
-        if not self._db:
-            return
+        coin = trade["instrument"]
         try:
-            state = self._db.get_bot_state()
-            if state:
-                self._db.update_bot_state({
-                    "total_trades": (state.get("total_trades") or 0) + 1,
-                    "last_updated": datetime.now(timezone.utc).isoformat(),
-                })
+            df = self.fetcher.fetch_ohlcv(coin, "5m", limit=500)
         except Exception as e:
-            logger.warning(f"Failed to update bot state: {e}")
+            logger.warning(f"chart regen fetch failed for {coin}: {e}")
+            return b""
 
-    def _update_bot_state_trade_closed(self, pnl: float) -> None:
-        """Update balance and stats after trade closure."""
-        if not self._db:
-            return
+        sig = Signal(
+            coin=coin, direction=trade["direction"],
+            entry_price=float(trade["entry_price"]),
+            stop_loss=float(trade["stop_loss"]),
+            tp1=float(trade.get("tp1_price") or trade.get("take_profit", 0)),
+            tp2=float(trade.get("tp2_price") or trade.get("take_profit", 0)),
+            fib_level_triggered=0.5,
+            swing_high=float(df["High"].max()),
+            swing_low=float(df["Low"].min()),
+            atr=1.0,
+            timestamp=pd.Timestamp(str(trade["timestamp"])),
+        )
+
+        confidence = float(trade.get("confidence", 0))
+        return self.chart_generator.render(
+            df=df, signal=sig, confidence=confidence,
+            exit_price=exit_price, exit_timestamp=df.index[-1], exit_reason=reason,
+        )
+
+    def _update_bot_state(self) -> None:
+        """Recompute and persist balance + win counts."""
+        trades = self.store.list_all_trades()
+        closed = [t for t in trades if t.get("status") == "CLOSED"]
+        total_pnl = sum(float(t.get("pnl") or 0) for t in closed)
+        wins = sum(1 for t in closed if float(t.get("pnl") or 0) > 0)
+
+        self.store.update_bot_state({
+            "balance": self.broker.balance,
+            "initial_balance": self.broker.initial_balance,
+            "total_trades": len(closed),
+            "winning_trades": wins,
+            "daily_pnl": total_pnl,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        })
+
+    @staticmethod
+    def _format_duration(start_iso) -> str:
+        if not start_iso:
+            return "?"
         try:
-            state = self._db.get_bot_state()
-            if state:
-                new_balance = (state.get("balance") or 0) + pnl
-                winning = state.get("winning_trades") or 0
-                if pnl > 0:
-                    winning += 1
-
-                self._db.update_bot_state({
-                    "balance": round(new_balance, 2),
-                    "daily_pnl": round(
-                        (state.get("daily_pnl") or 0) + pnl, 2
-                    ),
-                    "winning_trades": winning,
-                    "last_updated": datetime.now(timezone.utc).isoformat(),
-                })
-        except Exception as e:
-            logger.warning(f"Failed to update bot state: {e}")
+            start = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+            delta = datetime.now(timezone.utc) - start
+            mins = int(delta.total_seconds() // 60)
+            return f"{mins // 60}h {mins % 60}m"
+        except Exception:
+            return "?"

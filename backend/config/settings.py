@@ -1,124 +1,60 @@
-"""
-Application settings loaded from environment variables / .env file.
-All trading parameters are configurable here and can be overridden
-by PocketBase strategy_configs collection at runtime.
-"""
+"""Application settings loaded from .env with sensible defaults."""
 
-from pydantic_settings import BaseSettings
-from pydantic import Field
-from typing import Literal
+from typing import List
 from zoneinfo import ZoneInfo
-import os
-
-
-def _detect_system_timezone() -> str:
-    """Auto-detect timezone from the OS. Falls back to UTC."""
-    try:
-        # macOS/Linux: resolve /etc/localtime symlink
-        real = os.path.realpath("/etc/localtime")
-        # Path looks like .../zoneinfo/Europe/London
-        parts = real.split("/zoneinfo/")
-        if len(parts) == 2:
-            return parts[1]
-    except Exception:
-        pass
-    return "UTC"
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Global application settings."""
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # ── PocketBase ──────────────────────────────────────────────
-    pocketbase_url: str = Field(
-        default="http://127.0.0.1:8090",
-        description="PocketBase server URL",
-    )
+    # Coins (Hyperliquid perp symbols, comma-separated in .env)
+    coins: List[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL", "XRP", "BNB", "SUI", "TAO", "LINK", "HYPE", "ADA"])
 
-    # ── Trading Mode ────────────────────────────────────────────
-    trading_mode: Literal["paper", "live"] = Field(
-        default="paper",
-        description="Trading mode: 'paper' for simulation, 'live' for real trading",
-    )
+    @field_validator("coins", mode="before")
+    @classmethod
+    def split_coins(cls, v):
+        if isinstance(v, str):
+            return [c.strip().upper() for c in v.split(",") if c.strip()]
+        return v
 
-    # ── Instrument ──────────────────────────────────────────────
-    instrument: str = Field(
-        default="GC=F",
-        description="Trading instrument symbol (e.g. GC=F for Gold Futures)",
-    )
+    # Paper trading
+    paper_balance: float = 500.0
+    risk_per_trade_pct: float = 0.03
+    max_open_trades: int = 3
+    daily_loss_limit_pct: float = 0.15
 
-    # ── Timeframe ───────────────────────────────────────────────
-    timeframe: str = Field(
-        default="5m",
-        description="Candle timeframe (1m, 5m, 15m, 1h, 1d)",
-    )
+    # Strategy
+    min_confidence_pct: float = 60.0
+    execution_tf_default: str = "5m"
+    confirmation_tf: str = "15m"
+    trend_tf: str = "1h"
+    atr_period: int = 14
+    atr_sl_multiplier: float = 1.5
+    min_slope_pct: float = 0.002
 
-    # ── Timezone ─────────────────────────────────────────────────
-    timezone: str = Field(
-        default_factory=_detect_system_timezone,
-        description="User's local timezone (auto-detected from system, or set via TIMEZONE env var)",
-    )
+    # Chart
+    chart_candles_before_signal: int = 400
+    chart_candles_after_signal: int = 100
+    chart_width_px: int = 1600
+    chart_height_px: int = 800
 
-    # ── Market Hours Override ────────────────────────────────────
-    force_market_open: bool = Field(
-        default=False,
-        description="Force market to be treated as open (for paper trading testing)",
-    )
+    # Discord
+    discord_webhook_url: str = ""
 
-    # ── Paper Trading ───────────────────────────────────────────
-    paper_balance: float = Field(
-        default=500.0,
-        description="Initial paper trading balance in USD",
-    )
+    # User timezone (display only)
+    timezone: str = "UTC"
 
     @property
     def tz_info(self) -> ZoneInfo:
-        """Return ZoneInfo object for the configured timezone."""
         return ZoneInfo(self.timezone)
 
-    # ── Strategy Defaults (overridden by PocketBase at runtime) ─
-    fib_lookback_period: int = Field(
-        default=20,
-        description="Number of candles to look back for swing points",
-    )
-    fib_entry_levels: list[float] = Field(
-        default=[0.382, 0.618],
-        description="Fibonacci levels that trigger entry signals",
-    )
-    fib_stop_loss_level: float = Field(
-        default=0.786,
-        description="Fibonacci level for stop loss placement",
-    )
-    risk_reward_ratio: float = Field(
-        default=2.0,
-        description="Risk:reward ratio (e.g. 2.0 means 1:2)",
-    )
-    risk_per_trade_pct: float = Field(
-        default=1.0,
-        description="Percentage of balance to risk per trade",
-    )
-    max_open_positions: int = Field(
-        default=3,
-        description="Maximum number of concurrent open positions",
-    )
-    max_daily_loss_pct: float = Field(
-        default=5.0,
-        description="Maximum daily loss as percentage of balance before stopping",
-    )
-
-    # ── Broker (future) ─────────────────────────────────────────
-    ib_host: str = Field(default="127.0.0.1")
-    ib_port: int = Field(default=7497)
-    ib_client_id: int = Field(default=1)
-
-    model_config = {
-        "env_file": os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            ".env",
-        ),
-        "env_file_encoding": "utf-8",
-        "extra": "ignore",
-    }
+    # Legacy (kept temporarily so existing code doesn't crash mid-migration)
+    instrument: str = "BTC"
+    timeframe: str = "5m"
+    trading_mode: str = "paper"
+    force_market_open: bool = False
 
 
-# Singleton instance
 settings = Settings()

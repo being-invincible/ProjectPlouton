@@ -1,19 +1,29 @@
 # Core
-pydantic>=2.0
-pydantic-settings>=2.0
+pydantic>=2.5
+pydantic-settings>=2.1
 python-dotenv>=1.0
 
-# Data & Analysis
-pandas>=2.0
-numpy>=1.24
-yfinance>=0.2.30
+# Data — crypto via ccxt (replaces yfinance)
+ccxt>=4.2
+pandas>=2.1
+numpy>=1.26
 
-# HTTP client (for PocketBase REST API)
-httpx>=0.25
+# Storage
+duckdb>=0.10
 
-# OLAP Analytics
-duckdb>=1.0
+# API
+fastapi>=0.110
+uvicorn[standard]>=0.27
+httpx>=0.27
 
-# Note: Technical indicators (VWAP, Fibonacci, swing points) are
-# implemented manually in strategy/indicators.py using pandas/numpy.
-# No pandas-ta or TA-Lib dependency needed.
+# Charting
+plotly>=5.20
+kaleido==0.2.1  # plotly PNG export — pin: 1.0+ has known issues
+
+# Notifications
+aiohttp>=3.9
+pytest-asyncio>=0.23
+
+# Util
+python-dateutil>=2.9
+tzdata

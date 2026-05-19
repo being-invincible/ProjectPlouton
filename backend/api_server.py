@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -296,6 +296,26 @@ async def get_stats():
         "candle_counts": candle_counts,
         "instruments": store.get_instruments(),
     })
+
+
+@app.get("/api/trades/{trade_id}/chart")
+def get_trade_chart(trade_id: str, type: str = "final"):
+    """Stream the saved chart PNG. type=initial|final, defaults to final (falls back to initial)."""
+    store = get_store()
+    trade = store.get_trade(trade_id)
+    if not trade:
+        return Response(status_code=404)
+
+    if type == "initial":
+        png = trade.get("chart_initial_png")
+    else:
+        png = trade.get("chart_final_png") or trade.get("chart_initial_png")
+
+    if not png:
+        return Response(status_code=404)
+    if isinstance(png, memoryview):
+        png = bytes(png)
+    return Response(content=png, media_type="image/png")
 
 
 if __name__ == "__main__":

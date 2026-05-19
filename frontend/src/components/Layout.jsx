@@ -39,7 +39,7 @@ const INSTRUMENT_META = {
 export default function Layout() {
   const location = useLocation();
   const [botStatus, setBotStatus] = useState('STOPPED');
-  const [instrument, setInstrument] = useState('GC=F');
+  const [instrument, setInstrument] = useState('BTC');
   const [activeStrategy, setActiveStrategy] = useState('Fibonacci Retracement');
   const [marketOpen, setMarketOpen] = useState(false);
   const [marketDisplay, setMarketDisplay] = useState('Checking market hours...');
@@ -57,7 +57,7 @@ export default function Layout() {
 
         if (state && Object.keys(state).length > 0) {
           setBotStatus(state.status || 'STOPPED');
-          setInstrument(state.instrument || 'GC=F');
+          setInstrument(state.instrument || 'BTC');
           setTradingMode((state.trading_mode || 'paper').toLowerCase());
         }
 
