@@ -45,6 +45,8 @@ class PaperBroker:
         """Reconstruct in-memory positions from DB rows after a bot restart."""
         for t in open_trades:
             trade_id = str(t["id"])
+            margin = float(t.get("initial_margin") or 0)
+            self.balance -= margin                          # deduct committed capital
             qty = float(t["quantity"])
             tp1_hit = bool(t.get("tp1_hit") or False)
             initial_qty = qty * 2 if tp1_hit else qty
@@ -60,7 +62,7 @@ class PaperBroker:
                 tp2=float(t.get("tp2_price") or t.get("take_profit", 0)),
                 notional=float(t.get("notional") or 0),
                 leverage=int(t.get("leverage") or 1),
-                initial_margin=float(t.get("initial_margin") or 0),
+                initial_margin=margin,
                 liquidation_price=float(t.get("liquidation_price") or 0),
                 funding_rate_hr=float(t.get("funding_rate_hr") or 0),
                 tp1_hit=tp1_hit,
@@ -71,13 +73,14 @@ class PaperBroker:
                       stop_loss: float, tp1: float, tp2: float, notional: float, leverage: int,
                       initial_margin: float, liquidation_price: float, funding_rate_hr: float) -> str:
         trade_id = str(uuid.uuid4())
+        self.balance -= initial_margin          # deduct margin upfront
         self.positions[trade_id] = PaperPosition(
             trade_id=trade_id, coin=coin, direction=direction, entry_price=entry,
             quantity=quantity, initial_quantity=quantity, stop_loss=stop_loss, tp1=tp1, tp2=tp2,
             notional=notional, leverage=leverage, initial_margin=initial_margin,
             liquidation_price=liquidation_price, funding_rate_hr=funding_rate_hr,
         )
-        logger.info(f"OPENED {direction} {coin} qty={quantity:.4f} entry={entry:.4f} SL={stop_loss:.4f}")
+        logger.info(f"OPENED {direction} {coin} qty={quantity:.4f} entry={entry:.4f} SL={stop_loss:.4f} margin=${initial_margin:.2f} balance=${self.balance:.2f}")
         return trade_id
 
     def check_exits(self, coin: str, current_price: float) -> list[tuple[str, str, float, float]]:
@@ -109,10 +112,12 @@ class PaperBroker:
                         pnl_partial = (pos.tp1 - pos.entry_price) * half
                     else:
                         pnl_partial = (pos.entry_price - pos.tp1) * half
+                    half_margin = pos.initial_margin * 0.5
                     pos.quantity -= half
                     pos.tp1_hit = True
-                    pos.stop_loss = pos.entry_price  # move to BE
-                    self.balance += pnl_partial
+                    pos.stop_loss = pos.entry_price     # move to breakeven
+                    pos.initial_margin = half_margin    # remaining position holds half margin
+                    self.balance += pnl_partial + half_margin   # return half margin
                     closures.append((trade_id, "TP1_PARTIAL", pos.tp1, pnl_partial))
 
             # TP2 — close remainder
@@ -131,8 +136,8 @@ class PaperBroker:
         pos = self.positions.pop(trade_id, None)
         if pos is None:
             return
-        self.balance += pnl
-        logger.info(f"CLOSED {pos.direction} {pos.coin} pnl=${pnl:.2f} balance=${self.balance:.2f}")
+        self.balance += pnl + pos.initial_margin   # return margin on close
+        logger.info(f"CLOSED {pos.direction} {pos.coin} pnl=${pnl:.2f} margin_returned=${pos.initial_margin:.2f} balance=${self.balance:.2f}")
 
     def update_positions(self, coin: str, current_price: float) -> list[tuple[str, str, float, float]]:
         """Convenience entry — same as check_exits."""

@@ -78,22 +78,28 @@ class CoinScanner:
         # 6. Score confidence
         confidence = self.confidence_scorer.score(signal=signal, df=exec_df, mtf_trend=mtf_trend)
 
-        # 7. Quality gate
+        # 7. Position sizing (must happen before quality check to know margin)
         open_trades = self.duckdb_store.count_open_trades()
         bot_state = self.duckdb_store.get_bot_state() or {}
         balance = float(bot_state.get("balance", settings.paper_balance))
         daily_pnl = float(bot_state.get("daily_pnl", 0.0))
-        if not self.quality_filter.accept(open_trades_count=open_trades, daily_pnl=daily_pnl, balance=balance, confidence=confidence):
-            logger.info(f"[{self.coin}] signal rejected by quality filter (confidence={confidence:.1f})")
-            return None
-
-        # 8. Position sizing
         max_lev = self.fetcher.get_max_leverage(self.coin)
         funding = self.fetcher.fetch_funding_rate(self.coin)
         position = self.position_sizer.size(
             balance=balance, entry=signal.entry_price, stop_loss=signal.stop_loss,
             direction=signal.direction, max_leverage_for_coin=max_lev, funding_rate_hr=funding,
         )
+
+        # 8. Quality gate (now includes margin check)
+        if not self.quality_filter.accept(
+            open_trades_count=open_trades, daily_pnl=daily_pnl, balance=balance,
+            confidence=confidence, position_margin=position.initial_margin,
+        ):
+            logger.info(
+                f"[{self.coin}] signal rejected by quality filter "
+                f"(confidence={confidence:.1f}, margin_needed=${position.initial_margin:.2f}, balance=${balance:.2f})"
+            )
+            return None
 
         # 9. Chart PNG
         try:

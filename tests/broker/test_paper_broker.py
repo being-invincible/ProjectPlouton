@@ -95,3 +95,67 @@ def test_rehydrated_position_exits_at_stop_loss():
     assert reason == "SL"
     assert exit_price == pytest.approx(95.0)
     assert pnl == pytest.approx((95.0 - 100.0) * 1.0)
+
+
+def test_open_position_deducts_initial_margin_from_balance():
+    broker = PaperBroker(initial_balance=200.0)
+    asyncio.run(broker.connect())
+    broker.open_position(
+        coin="HYPE", direction="LONG", entry=48.0, quantity=6.0,
+        stop_loss=47.0, tp1=49.0, tp2=50.0,
+        notional=288.0, leverage=3, initial_margin=96.0,
+        liquidation_price=32.0, funding_rate_hr=0.0,
+    )
+    assert broker.balance == pytest.approx(200.0 - 96.0)
+
+
+def test_close_position_returns_margin_plus_pnl():
+    broker = PaperBroker(initial_balance=200.0)
+    asyncio.run(broker.connect())
+    trade_id = broker.open_position(
+        coin="HYPE", direction="LONG", entry=48.0, quantity=6.0,
+        stop_loss=47.0, tp1=49.0, tp2=50.0,
+        notional=288.0, leverage=3, initial_margin=96.0,
+        liquidation_price=32.0, funding_rate_hr=0.0,
+    )
+    pnl = 12.0
+    broker._close_full(trade_id, pnl)
+    # balance = (200 - 96) + 12 + 96 = 212
+    assert broker.balance == pytest.approx(200.0 + pnl)
+
+
+def test_tp1_partial_returns_half_margin():
+    broker = PaperBroker(initial_balance=200.0)
+    asyncio.run(broker.connect())
+    broker.open_position(
+        coin="BTC", direction="LONG", entry=100.0, quantity=2.0,
+        stop_loss=95.0, tp1=110.0, tp2=120.0,
+        notional=200.0, leverage=1, initial_margin=200.0,
+        liquidation_price=80.0, funding_rate_hr=0.0,
+    )
+    # balance is 0 after open (200 - 200)
+    assert broker.balance == pytest.approx(0.0)
+
+    closures = broker.check_exits("BTC", current_price=111.0)
+    tp1_closure = next((c for c in closures if c[1] == "TP1_PARTIAL"), None)
+    assert tp1_closure is not None
+
+    # After TP1: half margin (100) returned + partial PnL
+    # partial PnL = (110 - 100) * 1.0 = 10
+    # balance = 0 + 100 + 10 = 110
+    assert broker.balance == pytest.approx(100.0 + (110.0 - 100.0) * 1.0)
+
+
+def test_rehydrate_deducts_margin_for_restored_positions():
+    """Rehydrated positions represent committed capital; balance must reflect reserved margin."""
+    broker = PaperBroker(initial_balance=200.0)
+    broker.rehydrate([
+        {
+            "id": "t1", "instrument": "HYPE", "direction": "LONG",
+            "entry_price": 48.0, "quantity": 6.0, "stop_loss": 48.0,
+            "tp1_price": 49.0, "tp2_price": 50.0, "take_profit": 50.0,
+            "tp1_hit": True, "notional": 289.0, "leverage": 3,
+            "initial_margin": 96.45, "liquidation_price": 32.0, "funding_rate_hr": 0.0,
+        }
+    ])
+    assert broker.balance == pytest.approx(200.0 - 96.45)
