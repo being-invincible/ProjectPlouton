@@ -413,7 +413,7 @@ async def delete_trade(trade_id: str):
     trade = store.get_trade(trade_id)
     if trade is None:
         return JSONResponse(status_code=404, content={"error": "Trade not found"})
-    store.conn.execute("DELETE FROM trades WHERE id = ?", [trade_id])
+    store.delete_trade(trade_id)
     return {"ok": True, "deleted": trade_id}
 
 
@@ -521,19 +521,6 @@ async def get_monitor():
 
     return result
 
-
-@app.post("/api/trades/{trade_id}/chart")
-async def upload_trade_chart(trade_id: str, type: str = "initial"):
-    """Accept a raw PNG body and store it as chart_initial_png or chart_final_png."""
-    from fastapi import Request
-    from fastapi import Request as _Req
-    store = get_store()
-    trade = store.get_trade(trade_id)
-    if not trade:
-        return JSONResponse(status_code=404, content={"error": "Trade not found"})
-    # Body is raw PNG bytes — read via starlette
-    col = "chart_initial_png" if type == "initial" else "chart_final_png"
-    return {"col": col, "trade_id": trade_id}
 
 
 @app.put("/api/trades/{trade_id}/charts")

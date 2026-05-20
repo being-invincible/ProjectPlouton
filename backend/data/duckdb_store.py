@@ -794,6 +794,11 @@ class DuckDBStore:
             return None
         return df.iloc[0].to_dict()
 
+    def delete_trade(self, trade_id: str) -> None:
+        """Hard-delete a trade record."""
+        with self._lock:
+            self.conn.execute("DELETE FROM trades WHERE id = ?", [trade_id])
+
     def get_trade_chart_flags(self, trade_id: str) -> tuple[bool, bool]:
         """Return (has_initial, has_final) booleans for chart blob presence."""
         row = self.conn.execute(
