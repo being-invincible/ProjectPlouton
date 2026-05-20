@@ -43,11 +43,28 @@ class DuckDBStore:
 
         self.db_path = db_path
         self._lock = threading.RLock()
-        self.conn = duckdb.connect(db_path, read_only=read_only)
+        # DuckDB connection objects are NOT thread-safe. The bot loop and the
+        # FastAPI server share one DuckDBStore (see run.py `set_store`), so a
+        # single shared connection means concurrent execute() calls from the
+        # bot thread and the dashboard's polling threads clobber each other's
+        # results (fetchone()->None, .description->floats) and eventually trigger
+        # a C++ null-deref crash. Hand each thread its own cursor on the same
+        # database instead — the documented DuckDB multithreading pattern.
+        self._base_conn = duckdb.connect(db_path, read_only=read_only)
+        self._local = threading.local()
         if not read_only:
             self._create_tables()
             self._migrate_v2()
         logger.info(f"DuckDB store opened: {db_path}")
+
+    @property
+    def conn(self):
+        """Per-thread DuckDB cursor on the shared database (thread-safe access)."""
+        cursor = getattr(self._local, "cursor", None)
+        if cursor is None:
+            cursor = self._base_conn.cursor()
+            self._local.cursor = cursor
+        return cursor
 
     def _create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -423,12 +440,17 @@ class DuckDBStore:
                     current_price = row[2]
                     total_candles = row[3]
 
-                    slope = (current_vma - prev_vma) / prev_vma * 100 if prev_vma != 0 else 0
+                    # Slope is a FRACTION (e.g. 0.0064 = +0.64% VMA change over 10
+                    # periods). All consumers — golden_pocket.min_slope_pct,
+                    # confidence_scorer._slope_strength, the coin_scanner exec-TF
+                    # switch, and the Discord summary's `slope*100` — expect a
+                    # fraction. Do NOT multiply by 100 here.
+                    slope = (current_vma - prev_vma) / prev_vma if prev_vma != 0 else 0
                     trend = "UP" if slope > 0 else "DOWN"
 
                     result[tf] = {
                         "trend": trend,
-                        "slope": round(slope, 4),
+                        "slope": round(slope, 6),
                         "vma": round(current_vma, 2),
                         "price": round(current_price, 2),
                         "candles": total_candles,
@@ -944,8 +966,9 @@ class DuckDBStore:
 
     def close(self) -> None:
         """Close the DuckDB connection."""
-        if self.conn:
-            self.conn.close()
+        if getattr(self, "_base_conn", None) is not None:
+            self._base_conn.close()
+            self._base_conn = None
             logger.info("DuckDB store closed")
 
     def __enter__(self):

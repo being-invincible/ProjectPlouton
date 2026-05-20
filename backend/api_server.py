@@ -105,9 +105,19 @@ def _serialize(obj):
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if pd.isna(obj):
-        return None
+        return [_serialize(x) for x in obj.tolist()]
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    # pd.isna on a non-scalar (list/array) returns an array → ambiguous in `if`.
+    # Only null-check true scalars.
+    if np.isscalar(obj) or obj is None:
+        try:
+            if pd.isna(obj):
+                return None
+        except (TypeError, ValueError):
+            pass
     return obj
 
 
