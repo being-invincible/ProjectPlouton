@@ -46,6 +46,10 @@ class OrderManager:
             "initial_margin": position.initial_margin,
             "liquidation_price": position.liquidation_price,
             "funding_rate_hr": position.funding_rate_hr,
+            "swing_high": signal.swing_high,
+            "swing_low": signal.swing_low,
+            "fib_level_triggered": signal.fib_level_triggered,
+            "trade_type": "paper",
             "chart_initial_png": chart_png,
         })
 
@@ -67,11 +71,15 @@ class OrderManager:
 
             closures = self.broker.check_exits(coin, current_price)
             for trade_id, reason, exit_price, pnl in closures:
+                trade = self.store.get_trade(trade_id)
+
                 if reason == "TP1_PARTIAL":
-                    self.store.update_trade(trade_id, {"tp1_hit": True, "stop_loss": exit_price})
+                    self.store.update_trade(trade_id, {
+                        "tp1_hit": True,
+                        "stop_loss": trade["entry_price"],
+                    })
                     continue
 
-                trade = self.store.get_trade(trade_id)
                 final_chart = await self._regenerate_chart_for_trade(trade, exit_price, reason)
 
                 pnl_pct = (pnl / float(trade.get("initial_margin", 1.0))) * 100 if trade.get("initial_margin") else 0.0
@@ -111,9 +119,9 @@ class OrderManager:
             stop_loss=float(trade["stop_loss"]),
             tp1=float(trade.get("tp1_price") or trade.get("take_profit", 0)),
             tp2=float(trade.get("tp2_price") or trade.get("take_profit", 0)),
-            fib_level_triggered=0.5,
-            swing_high=float(df["High"].max()),
-            swing_low=float(df["Low"].min()),
+            fib_level_triggered=float(trade.get("fib_level_triggered") or 0.5),
+            swing_high=float(trade.get("swing_high") or df["High"].max()),
+            swing_low=float(trade.get("swing_low") or df["Low"].min()),
             atr=1.0,
             timestamp=pd.Timestamp(str(trade["timestamp"])),
         )
