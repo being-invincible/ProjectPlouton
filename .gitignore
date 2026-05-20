@@ -47,3 +47,4 @@ dist/
 *.duckdb
 *.duckdb.wal
 pocketbase/pb_data/
+.claude/
