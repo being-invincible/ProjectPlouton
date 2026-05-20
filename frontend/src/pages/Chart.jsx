@@ -331,7 +331,7 @@ export default function Chart() {
                   {t.trend || '?'}
                 </Badge>
                 <span style={{ fontSize: '10px', color: '#475569', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {t.slope != null ? `${t.slope > 0 ? '+' : ''}${t.slope}%` : ''}
+                  {t.slope != null ? `${t.slope > 0 ? '+' : ''}${(t.slope * 100).toFixed(2)}%` : ''}
                 </span>
               </div>
             );

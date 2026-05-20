@@ -602,6 +602,95 @@ async def generate_trade_chart(trade_id: str):
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
+# ── Live Fibonacci Analysis ───────────────────────────────────────
+
+@app.get("/api/fib_analysis/{coin}")
+async def get_fib_analysis(coin: str):
+    """
+    Live Golden Pocket Fibonacci analysis for any coin.
+    Returns swing, zone, all retracement levels, and whether price is currently in the zone.
+    """
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from strategy.golden_pocket import GoldenPocketStrategy
+    from strategy.atr import compute_atr
+    from config import settings as bot_settings
+
+    store = get_store()
+    df = store.get_candles(instrument=coin, timeframe="5m", periods=500)
+    if df.empty:
+        return JSONResponse(status_code=404, content={"error": f"No candle data for {coin}"})
+
+    # Column names from get_candles are capitalised (Open/High/Low/Close/Volume)
+    if "Close" not in df.columns and "close" in df.columns:
+        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low",
+                                 "close": "Close", "volume": "Volume"})
+
+    strat = GoldenPocketStrategy()
+    swing = strat.detect_swing(df)
+    if swing is None:
+        return _clean({"coin": coin, "swing": None, "zone": None, "levels": {},
+                        "current_price": float(df["Close"].iloc[-1]), "in_golden_pocket": False})
+
+    rng = swing.high - swing.low
+    direction = swing.direction  # "UP" or "DOWN"
+    zone = strat.golden_pocket_zone(swing.low, swing.high, direction)
+
+    atr_series = compute_atr(df, period=bot_settings.atr_period)
+    atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
+    current_price = float(df["Close"].iloc[-1])
+
+    # Retracement levels — always measured from the dominant swing high/low.
+    # For UP swings (LONG setups): retracement goes from high downward.
+    # For DOWN swings (SHORT setups): bounce goes from low upward.
+    if direction == "UP":
+        levels = {
+            "swing_low":  {"price": swing.low,              "label": "Swing Low (0%)",          "role": "base"},
+            "fib_236":    {"price": swing.high - 0.236*rng, "label": "23.6% Retrace",            "role": "fib"},
+            "fib_382":    {"price": swing.high - 0.382*rng, "label": "38.2% Retrace",            "role": "fib"},
+            "gp_upper":   {"price": swing.high - 0.500*rng, "label": "50% — Golden Pocket Upper","role": "zone"},
+            "gp_lower":   {"price": swing.high - 0.618*rng, "label": "61.8% — Golden Pocket Lower","role":"zone"},
+            "fib_786":    {"price": swing.high - 0.786*rng, "label": "78.6% SL Zone",            "role": "sl"},
+            "swing_high": {"price": swing.high,             "label": "Swing High (100%)",        "role": "base"},
+            "ext_1618":   {"price": swing.high + 0.618*rng, "label": "1.618 Extension (TP2)",    "role": "tp"},
+        }
+    else:
+        levels = {
+            "swing_high": {"price": swing.high,             "label": "Swing High (100%)",        "role": "base"},
+            "fib_236":    {"price": swing.low  + 0.236*rng, "label": "23.6% Bounce",             "role": "fib"},
+            "fib_382":    {"price": swing.low  + 0.382*rng, "label": "38.2% Bounce",             "role": "fib"},
+            "gp_lower":   {"price": swing.low  + 0.500*rng, "label": "50% — Golden Pocket Lower","role": "zone"},
+            "gp_upper":   {"price": swing.low  + 0.618*rng, "label": "61.8% — Golden Pocket Upper","role":"zone"},
+            "fib_786":    {"price": swing.low  + 0.786*rng, "label": "78.6% SL Zone",            "role": "sl"},
+            "swing_low":  {"price": swing.low,              "label": "Swing Low (0%)",            "role": "base"},
+            "ext_1618":   {"price": swing.low  - 0.618*rng, "label": "1.618 Extension (TP2)",    "role": "tp"},
+        }
+
+    in_zone = zone.lower <= current_price <= zone.upper
+    mtf_trend = store.compute_mtf_trend(instrument=coin)
+
+    high_ts = swing.high_idx
+    low_ts  = swing.low_idx
+    return _clean({
+        "coin": coin,
+        "current_price": current_price,
+        "direction": direction,
+        "trend_1h": mtf_trend.get("1h", {}).get("trend"),
+        "slope_1h": mtf_trend.get("1h", {}).get("slope", 0),
+        "in_golden_pocket": in_zone,
+        "swing": {
+            "high": swing.high,
+            "low":  swing.low,
+            "high_ts": high_ts.isoformat() if hasattr(high_ts, "isoformat") else str(high_ts),
+            "low_ts":  low_ts.isoformat()  if hasattr(low_ts,  "isoformat") else str(low_ts),
+            "range": rng,
+        },
+        "zone": {"upper": zone.upper, "lower": zone.lower},
+        "levels": levels,
+        "atr": atr,
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8090, log_level="info")

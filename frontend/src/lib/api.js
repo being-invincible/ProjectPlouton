@@ -98,6 +98,12 @@ const api = {
     return res.json();
   },
 
+  /** Fibonacci analysis for a coin (swing, levels, golden pocket status) */
+  async getFibAnalysis(coin) {
+    const res = await fetch(`${API_BASE}/fib_analysis/${coin}`);
+    return res.json();
+  },
+
   /** Health check */
   async health() {
     const res = await fetch(`${API_BASE}/health`);
