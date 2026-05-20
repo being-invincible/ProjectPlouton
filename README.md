@@ -1,16 +1,17 @@
-# 🤖 TradingBot — Automated Futures Trading System
+# 🤖 Plouton — Production-Ready Crypto Perpetuals Trading Bot
 
-An automated paper-trading system for **Gold Futures** using the **Fibonacci Retracement** strategy, with a full dashboard UI.
+**Hermes V2** — An automated trading bot for **Hyperliquid crypto perpetuals** with real-time execution, advanced risk management, multi-strategy support, and a real-time monitoring dashboard.
 
 Project architecture, conventions, and current phase tracking are documented in `CLAUDE.md` (source of truth for AI and docs alignment).
 
 ## Architecture
 
-- **Backend**: Python 3.11+ — strategy engine, indicators, risk management
-- **Database/API**: PocketBase — built-in REST API, real-time SSE, admin UI
-- **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui
-- **Charts**: TradingView lightweight-charts
-- **Data**: yfinance (development) → Broker API (production)
+- **Backend**: Python 3.11+ with asyncio — bot loop, strategy engine, risk manager, order execution
+- **Exchange**: Hyperliquid REST + WebSocket — order execution, position tracking, real-time fills
+- **Database**: DuckDB with WAL — local time-series store, event log, crash safety
+- **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + TradingView lightweight-charts
+- **Notifications**: Discord bot with TradingView embedded chart previews
+- **Data**: Hyperliquid API (live) — 10-coin async scanner with signal aggregation
 
 ## Quick Start
 
@@ -20,17 +21,18 @@ cd backend
 pip install -r requirements.txt
 ```
 
-### 2. Start PocketBase
+### 2. Set up environment
 ```bash
-cd pocketbase
-./pocketbase serve
+cp .env.example .env
+# Edit .env with your Hyperliquid API key (optional for paper trading)
 ```
-Admin UI will be available at `http://127.0.0.1:8090/_/`
 
 ### 3. Start the trading bot
 ```bash
 python run.py
 ```
+The bot will initialize DuckDB, restore any previous session state, and start monitoring 10 coins.
+API server starts on `http://127.0.0.1:8090`
 
 ### 4. Start the dashboard (development)
 ```bash
@@ -38,30 +40,85 @@ cd frontend
 npm install
 npm run dev
 ```
-Dashboard at `http://localhost:5173`
+Dashboard available at `http://localhost:5174`
 
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust:
-- `INSTRUMENT` — trading symbol (default: `GC=F` for Gold Futures)
-- `TIMEFRAME` — candle interval (default: `5m`)
-- `PAPER_BALANCE` — starting balance (default: `500`)
-- `TRADING_MODE` — `paper` or `live`
+- `HYPERLIQUID_API_KEY` — API key for live trading (optional; paper trading works without)
+- `COINS` — comma-separated list of Hyperliquid perp symbols (default: `BTC,ETH,SOL,XRP,BNB,SUI,TAO,LINK,HYPE,ADA`)
+- `TIMEFRAME` — candle interval in minutes (default: `5`)
+- `PAPER_BALANCE` — starting paper balance in USD (default: `500`)
+- `TRADING_MODE` — `paper` for backtesting, `live` for real trading
+- `STRATEGY` — active strategy name (default: `golden_pocket`) — options: `fibonacci`, `atr`, `golden_pocket`
 
-Strategy parameters are configurable via the dashboard Settings page.
+Strategy parameters are tunable in the Settings page or via API.
 
 ## Project Structure
 
 ```
-TradingBot/
-├── backend/           # Python trading engine
-│   ├── config/        # Pydantic settings
-│   ├── data/          # Market data fetching
-│   ├── strategy/      # Trading strategies (Fibonacci)
-│   ├── engine/        # Signal generation, risk, orders
-│   ├── broker/        # Paper & live broker adapters
-│   └── bot.py         # Main trading loop
-├── frontend/          # React dashboard
-├── pocketbase/        # PocketBase binary + data
-└── run.py             # Top-level runner
+ProjectHermes/
+├── backend/
+│   ├── bot.py                 # Main event loop + trading engine
+│   ├── run.py                 # Entry point — bot + API server
+│   ├── pocketbase_client.py   # Legacy (read-only API access)
+│   ├── config/
+│   │   └── settings.py        # Pydantic BaseSettings (.env config)
+│   ├── data/
+│   │   ├── duckdb_store.py    # Time-series + event persistence
+│   │   ├── market_data.py     # Market data aggregation
+│   │   └── hyperliquid_fetcher.py  # Hyperliquid candle fetcher
+│   ├── broker/
+│   │   ├── base.py            # Broker interface
+│   │   └── paper_broker.py    # Paper trading with margin tracking
+│   ├── strategy/
+│   │   ├── base.py            # Strategy abstract class
+│   │   ├── fibonacci.py       # Fibonacci Retracement
+│   │   ├── atr.py             # ATR Volatility
+│   │   ├── golden_pocket.py   # Golden Pocket
+│   │   └── indicators.py      # TA-Lib indicators
+│   ├── engine/
+│   │   ├── signal_generator.py    # Multi-timeframe signals
+│   │   ├── confidence_scorer.py   # Signal quality scoring
+│   │   ├── quality_filter.py      # Trade entry filters
+│   │   ├── order_manager.py       # Event sourcing + partial fills
+│   │   ├── position_sizer.py      # Risk-based position sizing
+│   │   └── risk_manager.py        # Stop-loss + liquidation prevention
+│   ├── scanner/
+│   │   ├── coin_scanner.py        # Async 10-coin monitor
+│   │   └── async_runner.py        # Event loop management
+│   ├── notifications/
+│   │   ├── discord_notifier.py    # Discord alerts
+│   │   └── chart_generator.py     # TradingView chart embeds
+│   └── charts/
+│       └── fib_chart.py           # Fibonacci chart generation
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx                # Router + layout
+│   │   ├── pages/
+│   │   │   ├── Dashboard.jsx      # Active trades + market status
+│   │   │   ├── Monitor.jsx        # 10-coin signal monitor
+│   │   │   ├── Chart.jsx          # TradingView candlestick chart
+│   │   │   ├── Trades.jsx         # Trade history + timeline
+│   │   │   ├── Strategy.jsx       # Strategy config
+│   │   │   └── Settings.jsx       # Runtime tweaks
+│   │   ├── components/
+│   │   │   ├── Layout.jsx         # Sidebar + nav
+│   │   │   ├── FibChart.jsx       # Fibonacci levels overlay
+│   │   │   └── ui/               # shadcn/ui components
+│   │   └── lib/
+│   │       └── api.js            # API fetch helpers
+│   └── vite.config.js
+├── tests/
+│   ├── broker/
+│   ├── engine/
+│   ├── strategy/
+│   ├── scanner/
+│   ├── data/
+│   └── notifications/
+├── pocketbase/                # Standalone server binary (optional read-only)
+├── logs/                      # Runtime logs
+├── CLAUDE.md                  # AI project memory (source of truth)
+├── README.md                  # This file
+└── run.py                     # Main entry point
 ```
