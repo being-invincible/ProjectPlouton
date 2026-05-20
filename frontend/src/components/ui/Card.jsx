@@ -1,72 +1,102 @@
-import { cn } from '../../lib/utils';
+import * as React from "react";
+import { cn } from "@/lib/utils";
 
-export function Card({ className, children, hover = true, ...props }) {
+function Card({ className, size = "default", hover, ...props }) {
   return (
     <div
+      data-slot="card"
+      data-size={size}
       className={cn(
-        'relative rounded-2xl border border-white/[0.06] bg-white/[0.025] backdrop-blur-xl overflow-hidden',
-        'shadow-[0_4px_24px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.03)]',
-        hover && 'transition-all duration-300 hover:border-white/[0.1] hover:bg-white/[0.04] hover:shadow-[0_8px_40px_rgba(0,0,0,0.3)]',
+        "group/card flex flex-col gap-4 overflow-hidden rounded-xl bg-card py-4 text-sm text-card-foreground ring-1 ring-foreground/10 has-data-[slot=card-footer]:pb-0 data-[size=sm]:gap-3 data-[size=sm]:py-3",
         className
       )}
       {...props}
-    >
-      {children}
-    </div>
+    />
   );
 }
 
-export function CardHeader({ className, children, ...props }) {
+function CardHeader({ className, ...props }) {
   return (
     <div
+      data-slot="card-header"
       className={cn(
-        'flex items-center justify-between px-7 pt-6 pb-5 border-b border-white/[0.04]',
+        "grid auto-rows-min items-start gap-1 rounded-t-xl px-4 has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-4",
         className
       )}
       {...props}
-    >
-      {children}
-    </div>
+    />
   );
 }
 
-export function CardTitle({ className, icon: Icon, iconColor, children, ...props }) {
+function CardTitle({ className, icon: Icon, iconColor, children, ...props }) {
   return (
-    <h3
-      className={cn('text-[14px] font-semibold tracking-tight flex items-center gap-3 text-slate-100', className)}
+    <div
+      data-slot="card-title"
+      className={cn("font-semibold text-base leading-snug flex items-center gap-2", className)}
       {...props}
     >
-      {Icon && (
-        <span
-          className="flex items-center justify-center w-9 h-9 rounded-xl"
-          style={{ background: `${iconColor}15`, color: iconColor }}
-        >
-          <Icon className="w-4 h-4" />
-        </span>
-      )}
-      {children}
-    </h3>
-  );
-}
-
-export function CardContent({ className, children, ...props }) {
-  return (
-    <div className={cn('px-7 pb-7 pt-5', className)} {...props}>
+      {Icon && <Icon style={{ width: '16px', height: '16px', color: iconColor, flexShrink: 0 }} />}
       {children}
     </div>
   );
 }
 
-export function CardDescription({ className, children }) {
+function CardDescription({ className, ...props }) {
   return (
-    <p className={cn('text-[13px] text-slate-500 mt-1.5', className)}>
-      {children}
-    </p>
+    <div
+      data-slot="card-description"
+      className={cn("text-sm text-muted-foreground mt-0.5", className)}
+      {...props}
+    />
   );
 }
 
-export function Separator({ className }) {
+function CardAction({ className, ...props }) {
   return (
-    <div className={cn('h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent', className)} />
+    <div
+      data-slot="card-action"
+      className={cn("col-start-2 row-span-2 row-start-1 self-start justify-self-end", className)}
+      {...props}
+    />
   );
 }
+
+function CardContent({ className, ...props }) {
+  return (
+    <div
+      data-slot="card-content"
+      className={cn("px-4", className)}
+      {...props}
+    />
+  );
+}
+
+function CardFooter({ className, ...props }) {
+  return (
+    <div
+      data-slot="card-footer"
+      className={cn("flex items-center rounded-b-xl border-t bg-muted/50 p-4", className)}
+      {...props}
+    />
+  );
+}
+
+function Separator({ className, ...props }) {
+  return (
+    <hr
+      className={cn("border-border", className)}
+      {...props}
+    />
+  );
+}
+
+export {
+  Card,
+  CardHeader,
+  CardFooter,
+  CardTitle,
+  CardAction,
+  CardDescription,
+  CardContent,
+  Separator,
+};

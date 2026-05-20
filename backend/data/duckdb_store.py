@@ -237,6 +237,20 @@ class DuckDBStore:
             "UPDATE candles SET asset_class = 'crypto' WHERE asset_class IS NULL OR asset_class = 'futures'"
         )
 
+        # Create trade_events table if missing (added after initial DB creation)
+        existing_tables = {row[0] for row in self.conn.execute("SHOW TABLES").fetchall()}
+        if "trade_events" not in existing_tables:
+            self.conn.execute("""
+            CREATE TABLE trade_events (
+                id          VARCHAR PRIMARY KEY,
+                trade_id    VARCHAR NOT NULL,
+                event_type  VARCHAR NOT NULL,
+                price       DOUBLE,
+                pnl_partial DOUBLE,
+                timestamp   TIMESTAMP NOT NULL
+            )
+            """)
+
     # ── Candle Operations ────────────────────────────────────────
 
     def store_candles(

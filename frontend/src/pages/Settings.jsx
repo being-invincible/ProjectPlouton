@@ -93,14 +93,14 @@ export default function Settings() {
         </div>
         <div className="animate-fade-in" style={{ display: 'flex', gap: '10px', animationDelay: '0.15s' }}>
           <Button variant="ghost" onClick={handleReset}>
-            <RotateCcw style={{ width: '14px', height: '14px', marginRight: '6px' }} />
+            <RotateCcw style={{ width: '14px', height: '14px' }} />
             Reset
           </Button>
           <Button onClick={handleSave} disabled={saving}>
             {saved ? (
-              <><CheckCircle style={{ width: '14px', height: '14px', marginRight: '6px' }} /> Saved</>
+              <><CheckCircle style={{ width: '14px', height: '14px' }} /> Saved</>
             ) : (
-              <><Save style={{ width: '14px', height: '14px', marginRight: '6px' }} /> Save Changes</>
+              <><Save style={{ width: '14px', height: '14px' }} /> Save Changes</>
             )}
           </Button>
         </div>
@@ -129,14 +129,21 @@ export default function Settings() {
                 </Select>
               </InputField>
 
-              <InputField label="Instrument" hint="Gold: GC=F, Silver: SI=F, Oil: CL=F" accentColor="#3b82f6">
+              <InputField label="Primary Instrument" hint="Used for chart display; bot scans all configured coins" accentColor="#3b82f6">
                 <Select
                   value={instrument}
                   onChange={e => setInstrument(e.target.value)}
                 >
-                  <option value="GC=F">Gold Futures (GC=F)</option>
-                  <option value="SI=F">Silver Futures (SI=F)</option>
-                  <option value="CL=F">Oil Futures (CL=F)</option>
+                  <option value="BTC">Bitcoin (BTC)</option>
+                  <option value="ETH">Ethereum (ETH)</option>
+                  <option value="SOL">Solana (SOL)</option>
+                  <option value="XRP">XRP</option>
+                  <option value="BNB">BNB</option>
+                  <option value="SUI">SUI</option>
+                  <option value="TAO">TAO</option>
+                  <option value="LINK">Chainlink (LINK)</option>
+                  <option value="HYPE">HYPE</option>
+                  <option value="ADA">Cardano (ADA)</option>
                 </Select>
               </InputField>
               <InputField label="Paper Trading Balance ($)" hint="Starting balance for paper trading" accentColor="#3b82f6">

@@ -25,11 +25,13 @@ BACKEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend"
 sys.path.insert(0, BACKEND_DIR)
 
 
-def start_api_server_in_thread(shared_store) -> tuple[uvicorn.Server, threading.Thread]:
-    """Start FastAPI in-process in a background thread using a shared DuckDB store."""
-    from api_server import app, set_store
-
-    set_store(shared_store)
+def start_api_server_in_thread() -> tuple[uvicorn.Server, threading.Thread]:
+    """Start FastAPI in a background thread with its own read-only DuckDB connection.
+    Must NOT share the bot's write connection — concurrent access to the same DuckDB
+    connection object across threads causes C++ null-deref crashes."""
+    from api_server import app
+    # API server opens its own read-only DuckDB connection via get_store()
+    # DuckDB 1.x supports one write + multiple read-only connections per process.
     config = uvicorn.Config(app, host="0.0.0.0", port=8090, log_level="info")
     server = uvicorn.Server(config)
 
@@ -57,13 +59,22 @@ async def async_main(args):
 
     if not args.no_api:
         print("[INFO] Starting FastAPI server on port 8090...")
-        api_server, api_thread = start_api_server_in_thread(bot._duckdb_store)
+        api_server, api_thread = start_api_server_in_thread()
+        # Share the bot's DuckDB connection with the API so both use the same
+        # write-mode connection (avoids the macOS exclusive-lock conflict where
+        # a read-only connection in the same process cannot acquire the lock).
+        from api_server import set_bot_running_in_process, set_store
+        set_bot_running_in_process(True)
+        set_store(bot._duckdb_store)
 
     print("\n[INFO] Starting Trading Bot...\n")
 
     try:
         await bot.run()
     finally:
+        if not args.no_api:
+            from api_server import set_bot_running_in_process
+            set_bot_running_in_process(False)
         if api_server is not None:
             print("[INFO] Stopping FastAPI server...")
             api_server.should_exit = True

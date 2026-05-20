@@ -12,17 +12,34 @@ import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
 import { SkeletonTable } from '../components/ui/Skeleton';
 
+const TYPE_STYLES = {
+  paper:     { bg: 'rgba(59,130,246,0.12)',  color: '#60a5fa', label: 'Paper' },
+  live:      { bg: 'rgba(16,185,129,0.12)',  color: '#10b981', label: 'Live' },
+  backtest:  { bg: 'rgba(251,191,36,0.12)',  color: '#fbbf24', label: 'Backtest' },
+};
+
+function TradeTypePill({ type }) {
+  const s = TYPE_STYLES[type] || TYPE_STYLES.paper;
+  return (
+    <span style={{
+      fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '5px',
+      background: s.bg, color: s.color, letterSpacing: '0.06em', textTransform: 'uppercase',
+    }}>
+      {s.label}
+    </span>
+  );
+}
+
 export default function Trades() {
   const [trades, setTrades] = useState([]);
   const [totalPages, setTotalPages] = useState(1);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState({ status: '', direction: '' });
+  const [filter, setFilter] = useState({ status: '', direction: '', trade_type: '' });
   const perPage = 20;
 
   useEffect(() => {
     fetchTrades();
-    // Poll every 30s
     const interval = setInterval(fetchTrades, 30000);
     return () => clearInterval(interval);
   }, [page, filter]);
@@ -34,6 +51,9 @@ export default function Trades() {
       let filtered = Array.isArray(allTrades) ? allTrades : [];
       if (filter.direction) {
         filtered = filtered.filter(t => t.direction === filter.direction);
+      }
+      if (filter.trade_type) {
+        filtered = filtered.filter(t => (t.trade_type || 'paper') === filter.trade_type);
       }
       setTotalPages(Math.ceil(filtered.length / perPage) || 1);
       const start = (page - 1) * perPage;
@@ -50,7 +70,7 @@ export default function Trades() {
 
       {/* Filters */}
       <Card hover={false} className="animate-fade-in" style={{ animationDelay: '0.05s' }}>
-        <CardContent style={{ paddingTop: '20px', paddingBottom: '20px' }}>
+        <CardContent style={{ padding: '18px 28px' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569' }}>
               <Filter style={{ width: '15px', height: '15px' }} />
@@ -78,6 +98,17 @@ export default function Trades() {
               <option value="">All Directions</option>
               <option value="LONG">Long</option>
               <option value="SHORT">Short</option>
+            </Select>
+
+            <Select
+              style={{ width: 'auto', minWidth: '150px' }}
+              value={filter.trade_type}
+              onChange={(e) => { setFilter(f => ({ ...f, trade_type: e.target.value })); setPage(1); }}
+            >
+              <option value="">All Types</option>
+              <option value="paper">Paper Trade</option>
+              <option value="live">Live Trade</option>
+              <option value="backtest">Backtest</option>
             </Select>
 
             <span style={{ marginLeft: 'auto', fontSize: '12px', color: '#475569' }}>
@@ -114,7 +145,7 @@ export default function Trades() {
               <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.015)' }}>
-                    {['Date & Time', 'Instrument', 'Direction', 'Entry Price', 'Exit Price', 'P&L', 'Status', 'Strategy'].map((h, i) => (
+                    {['Date & Time', 'Instrument', 'Type', 'Direction', 'Entry Price', 'Exit Price', 'P&L', 'Status', 'Strategy'].map((h, i) => (
                       <th key={h}
                         style={{
                           padding: '18px 20px',
@@ -136,6 +167,8 @@ export default function Trades() {
                 <tbody>
                   {trades.map((trade, i) => {
                     const pnl = formatPnL(trade.pnl);
+                    const tradeType = trade.trade_type || 'paper';
+                    const isBacktest = tradeType === 'backtest';
                     return (
                       <Link key={trade.id} to={`/trades/${trade.id}`} className="contents">
                         <tr
@@ -143,16 +176,24 @@ export default function Trades() {
                             borderBottom: '1px solid rgba(255,255,255,0.03)',
                             cursor: 'pointer',
                             transition: 'background 0.15s',
-                            background: i % 2 === 1 ? 'rgba(255,255,255,0.012)' : 'transparent',
+                            background: isBacktest
+                              ? 'rgba(251,191,36,0.03)'
+                              : i % 2 === 1 ? 'rgba(255,255,255,0.012)' : 'transparent',
+                            borderLeft: isBacktest ? '2px solid rgba(251,191,36,0.3)' : '2px solid transparent',
                           }}
-                          onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.035)'}
-                          onMouseLeave={e => e.currentTarget.style.background = i % 2 === 1 ? 'rgba(255,255,255,0.012)' : 'transparent'}
+                          onMouseEnter={e => e.currentTarget.style.background = isBacktest ? 'rgba(251,191,36,0.07)' : 'rgba(255,255,255,0.035)'}
+                          onMouseLeave={e => e.currentTarget.style.background = isBacktest
+                            ? 'rgba(251,191,36,0.03)'
+                            : i % 2 === 1 ? 'rgba(255,255,255,0.012)' : 'transparent'}
                         >
                           <td style={{ padding: '18px 20px', paddingLeft: '24px', color: '#94a3b8' }}>
                             {formatDateTime(trade.timestamp)}
                           </td>
                           <td style={{ padding: '18px 20px', fontWeight: 500, color: '#e2e8f0' }}>
                             {trade.instrument}
+                          </td>
+                          <td style={{ padding: '18px 20px' }}>
+                            <TradeTypePill type={tradeType} />
                           </td>
                           <td style={{ padding: '18px 20px' }}>
                             <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>

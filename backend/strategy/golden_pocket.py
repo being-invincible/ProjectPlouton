@@ -42,15 +42,43 @@ class Signal:
 class GoldenPocketStrategy:
     """Detects retracements into the 50%-61.8% Fib zone in a trending market."""
 
-    def detect_swing(self, df: pd.DataFrame, lookback: int = 200) -> Swing:
-        """Find the most recent dominant swing in the last `lookback` candles."""
+    def detect_swing(self, df: pd.DataFrame, lookback: int = 100, pivot_window: int = 5) -> Optional[Swing]:
+        """
+        Find the most recent dominant swing using pivot points on close prices.
+
+        Uses pivot detection rather than global argmax/argmin so the result
+        reflects the most recent local reversal, not the background trend
+        dominating a wide lookback window. Close prices are used instead of
+        wicks to avoid spike-candle distortion of the Fibonacci range.
+        """
         recent = df.tail(lookback)
-        high_idx = recent["High"].idxmax()
-        low_idx = recent["Low"].idxmin()
-        high = float(recent.loc[high_idx, "High"])
-        low = float(recent.loc[low_idx, "Low"])
-        direction = "UP" if high_idx > low_idx else "DOWN"
-        return Swing(high=high, low=low, high_idx=high_idx, low_idx=low_idx, direction=direction)
+        closes = recent["Close"]
+        n = len(closes)
+
+        pivot_highs: list[tuple] = []
+        pivot_lows: list[tuple] = []
+
+        for i in range(pivot_window, n - pivot_window):
+            center = float(closes.iloc[i])
+            neighborhood = closes.iloc[i - pivot_window: i + pivot_window + 1]
+            if center >= float(neighborhood.max()):
+                pivot_highs.append((closes.index[i], center))
+            if center <= float(neighborhood.min()):
+                pivot_lows.append((closes.index[i], center))
+
+        if not pivot_highs or not pivot_lows:
+            return None
+
+        last_high_ts, last_high = pivot_highs[-1]
+        last_low_ts, last_low = pivot_lows[-1]
+        direction = "DOWN" if last_high_ts > last_low_ts else "UP"
+        return Swing(
+            high=last_high,
+            low=last_low,
+            high_idx=last_high_ts,
+            low_idx=last_low_ts,
+            direction=direction,
+        )
 
     def golden_pocket_zone(self, swing_low: float, swing_high: float, direction: str) -> GoldenPocketZone:
         """Return the price zone bounded by 50% and 61.8% retracement."""
@@ -98,27 +126,34 @@ class GoldenPocketStrategy:
 
         if trend_1h not in ("UP", "DOWN"):
             return None
-        if trend_15m != trend_1h:
-            return None
+        # Do NOT require 15m to match 1h — golden pocket is a retracement entry.
+        # By definition, when price pulls back to the 50-61.8% zone, 15m VMA slopes
+        # against the primary trend. Requiring agreement here eliminates all entries.
         if slope_1h < settings.min_slope_pct:
             return None
 
         direction: Literal["LONG", "SHORT"] = "LONG" if trend_1h == "UP" else "SHORT"
 
-        swing = self.detect_swing(df, lookback=200)
+        swing = self.detect_swing(df)
+        if swing is None:
+            return None
         zone = self.golden_pocket_zone(swing.low, swing.high, swing.direction)
 
         last_close = float(df["Close"].iloc[-1])
+        last_high  = float(df["High"].iloc[-1])
+        last_low   = float(df["Low"].iloc[-1])
 
         if direction == "LONG":
-            if not (zone.lower <= last_close <= zone.upper):
-                return None
             if swing.direction != "UP":
                 return None
-        else:
-            if not (zone.lower <= last_close <= zone.upper):
+            # Accept wick touch into zone (low dipped in) or close inside zone
+            if not (zone.lower <= last_low <= zone.upper or zone.lower <= last_close <= zone.upper):
                 return None
+        else:
             if swing.direction != "DOWN":
+                return None
+            # Accept wick touch into zone (high reached in) or close inside zone
+            if not (zone.lower <= last_high <= zone.upper or zone.lower <= last_close <= zone.upper):
                 return None
 
         atr_series = compute_atr(df, period=settings.atr_period)

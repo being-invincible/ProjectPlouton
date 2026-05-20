@@ -1,59 +1,44 @@
-import { cn } from '../../lib/utils';
+import { cn } from "@/lib/utils";
 
-export function Skeleton({ className, ...props }) {
+function Skeleton({ className, ...props }) {
   return (
     <div
-      className={cn(
-        'rounded-xl bg-gradient-to-r from-white/[0.04] via-white/[0.08] to-white/[0.04]',
-        'bg-[length:200%_100%] animate-[shimmer_1.5s_ease-in-out_infinite]',
-        className
-      )}
+      data-slot="skeleton"
+      className={cn("animate-pulse rounded-lg bg-muted", className)}
       {...props}
     />
   );
 }
 
-export function SkeletonCard({ className }) {
+function SkeletonTable({ rows = 5 }) {
   return (
-    <div className={cn('rounded-2xl border border-white/[0.06] bg-white/[0.03] p-5', className)}>
-      <Skeleton className="h-4 w-24 mb-3" />
-      <Skeleton className="h-8 w-32 mb-2" />
-      <Skeleton className="h-3 w-16" />
-    </div>
-  );
-}
-
-export function SkeletonTable({ rows = 5 }) {
-  return (
-    <div className="space-y-0">
-      {/* Header */}
-      <div className="flex gap-4 px-4 py-3 border-b border-white/[0.06]">
-        {[...Array(6)].map((_, i) => (
-          <Skeleton key={i} className="h-3 flex-1" />
-        ))}
-      </div>
-      {/* Rows */}
-      {[...Array(rows)].map((_, i) => (
-        <div key={i} className="flex gap-4 px-4 py-4 border-b border-white/[0.04]">
-          {[...Array(6)].map((_, j) => (
-            <Skeleton key={j} className="h-4 flex-1" />
-          ))}
+    <div style={{ padding: '8px 0' }}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} style={{ padding: '12px 24px', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+          <Skeleton style={{ height: '20px', width: `${60 + (i % 3) * 15}%` }} />
         </div>
       ))}
     </div>
   );
 }
 
-export function SkeletonChart({ className }) {
+function SkeletonCard() {
   return (
-    <div className={cn('flex items-end gap-1 px-4', className)}>
-      {[40, 55, 35, 65, 45, 70, 50, 60, 75, 55, 45, 65, 80, 60, 70, 50, 85, 65, 55, 75].map((h, i) => (
-        <Skeleton
-          key={i}
-          className="flex-1 rounded-sm"
-          style={{ height: `${h}%`, animationDelay: `${i * 0.05}s` }}
-        />
-      ))}
+    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <Skeleton style={{ height: '14px', width: '40%' }} />
+      <Skeleton style={{ height: '32px', width: '60%' }} />
+      <Skeleton style={{ height: '12px', width: '50%' }} />
     </div>
   );
 }
+
+function SkeletonChart() {
+  return (
+    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <Skeleton style={{ height: '14px', width: '30%' }} />
+      <Skeleton style={{ height: '180px', width: '100%' }} />
+    </div>
+  );
+}
+
+export { Skeleton, SkeletonTable, SkeletonCard, SkeletonChart };

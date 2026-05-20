@@ -217,40 +217,22 @@ export default function Strategy() {
                       {strategy.description || '—'}
                     </span>
                     <div>
-                      <Badge variant={strategy.is_active ? 'success' : 'secondary'}>
+                      <Badge variant={strategy.is_active ? 'success' : 'secondary'} dot>
                         {strategy.is_active ? 'Active' : 'Inactive'}
                       </Badge>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <button
+                      <Button
+                        variant={strategy.is_active ? 'danger' : 'success'}
+                        size="sm"
                         onClick={(e) => { e.stopPropagation(); toggleActive(strategy.id); }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '5px',
-                          padding: '6px 14px',
-                          borderRadius: '8px',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                          border: 'none',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s',
-                          background: strategy.is_active ? 'rgba(239, 68, 68, 0.08)' : 'rgba(16, 185, 129, 0.08)',
-                          color: strategy.is_active ? '#ef4444' : '#10b981',
-                        }}
-                        onMouseEnter={e => {
-                          e.currentTarget.style.background = strategy.is_active ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)';
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = strategy.is_active ? 'rgba(239, 68, 68, 0.08)' : 'rgba(16, 185, 129, 0.08)';
-                        }}
                       >
                         {strategy.is_active ? (
                           <><XCircle style={{ width: '13px', height: '13px' }} /> Deactivate</>
                         ) : (
                           <><CheckCircle style={{ width: '13px', height: '13px' }} /> Set Active</>
                         )}
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
@@ -268,14 +250,14 @@ export default function Strategy() {
                         </h3>
                         <div style={{ display: 'flex', gap: '10px' }}>
                           <Button variant="ghost" onClick={() => handleReset(strategy)}>
-                            <RotateCcw style={{ width: '14px', height: '14px', marginRight: '6px' }} />
+                            <RotateCcw style={{ width: '14px', height: '14px' }} />
                             Reset
                           </Button>
                           <Button onClick={() => handleSaveParams(strategy.id)} disabled={saving}>
                             {saved ? (
-                              <><CheckCircle style={{ width: '14px', height: '14px', marginRight: '6px' }} /> Saved</>
+                              <><CheckCircle style={{ width: '14px', height: '14px' }} /> Saved</>
                             ) : (
-                              <><Save style={{ width: '14px', height: '14px', marginRight: '6px' }} /> Save Changes</>
+                              <><Save style={{ width: '14px', height: '14px' }} /> Save Changes</>
                             )}
                           </Button>
                         </div>

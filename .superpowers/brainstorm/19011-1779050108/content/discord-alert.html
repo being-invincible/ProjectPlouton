@@ -1,0 +1,130 @@
+<h2>Discord Alert Design</h2>
+<p class="subtitle">What the bot posts to your #trading-alerts channel when a Fib setup fires</p>
+
+<div class="mockup">
+  <div class="mockup-header">Discord — #trading-alerts</div>
+  <div class="mockup-body" style="background:#313338;border-radius:8px;padding:0;overflow:hidden;">
+
+    <!-- Discord message -->
+    <div style="padding:16px 20px;display:flex;gap:14px;">
+      <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#2563eb);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px;">🪽</div>
+      <div style="flex:1;">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;">
+          <span style="font-weight:700;color:#fff;font-size:14px;">Hermes Bot</span>
+          <span style="font-size:11px;color:#5c6068;">Today at 14:32</span>
+        </div>
+
+        <!-- Embed -->
+        <div style="background:#2b2d31;border-left:4px solid #10b981;border-radius:4px;padding:14px 16px;max-width:480px;">
+          <!-- Embed title -->
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <span style="font-size:20px;">📈</span>
+            <span style="font-weight:700;color:#10b981;font-size:15px;">SOL/USDC — LONG Signal</span>
+          </div>
+
+          <!-- Fields grid -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#72767d;margin-bottom:3px;">Entry Zone</div>
+              <div style="font-size:13px;font-weight:600;color:#e3e5e8;font-family:monospace;">$145.20</div>
+            </div>
+            <div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#72767d;margin-bottom:3px;">Stop Loss</div>
+              <div style="font-size:13px;font-weight:600;color:#ef4444;font-family:monospace;">$138.40</div>
+            </div>
+            <div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#72767d;margin-bottom:3px;">Take Profit</div>
+              <div style="font-size:13px;font-weight:600;color:#10b981;font-family:monospace;">$158.80</div>
+            </div>
+            <div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#72767d;margin-bottom:3px;">Fib Level</div>
+              <div style="font-size:13px;font-weight:600;color:#fbbf24;font-family:monospace;">38.2% ★</div>
+            </div>
+            <div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#72767d;margin-bottom:3px;">R:R Ratio</div>
+              <div style="font-size:13px;font-weight:600;color:#e3e5e8;font-family:monospace;">1 : 2.0</div>
+            </div>
+            <div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#72767d;margin-bottom:3px;">Risk $</div>
+              <div style="font-size:13px;font-weight:600;color:#e3e5e8;font-family:monospace;">$5.00 (1%)</div>
+            </div>
+          </div>
+
+          <!-- Trend row -->
+          <div style="background:#1e1f22;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#b5bac1;line-height:1.7;">
+            <span style="color:#72767d;">1h trend</span> ↑ <span style="color:#10b981;font-weight:600;">BULLISH</span> &nbsp;·&nbsp;
+            <span style="color:#72767d;">15m</span> ↑ <span style="color:#10b981;font-weight:600;">CONFIRMING</span> &nbsp;·&nbsp;
+            <span style="color:#72767d;">5m</span> <span style="color:#fbbf24;font-weight:600;">RETRACING to 38.2%</span><br>
+            <span style="color:#72767d;font-size:11px;">Swing high $158.90 → Swing low $134.10 · Fib drawn over 1h swing</span>
+          </div>
+
+          <!-- Position sizing box -->
+          <div style="background:#1e1f22;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px;line-height:1.7;border:1px solid rgba(245,158,11,0.2);">
+            <div style="color:#f59e0b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">💼 Position Size (paper)</div>
+            <span style="color:#b5bac1;">Balance: <span style="color:#e3e5e8;font-family:monospace;">$500</span> &nbsp;·&nbsp; Qty: <span style="color:#e3e5e8;font-family:monospace;">0.735 SOL</span> &nbsp;·&nbsp; Notional: <span style="color:#e3e5e8;font-family:monospace;">$106.72</span></span><br>
+            <span style="color:#b5bac1;">Suggested leverage: <span style="color:#fbbf24;font-family:monospace;font-weight:700;">2×</span> &nbsp;(keeps margin safe, max loss = $5.00)</span>
+          </div>
+
+          <!-- Chart placeholder -->
+          <div style="background:#1e1f22;border-radius:6px;height:200px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;border:1px dashed #3f4147;">
+            <!-- Fake candlestick chart -->
+            <svg width="420" height="180" viewBox="0 0 420 180" style="position:absolute;">
+              <!-- Grid lines -->
+              <line x1="0" y1="45" x2="420" y2="45" stroke="#2b2d31" stroke-width="1"/>
+              <line x1="0" y1="90" x2="420" y2="90" stroke="#2b2d31" stroke-width="1"/>
+              <line x1="0" y1="135" x2="420" y2="135" stroke="#2b2d31" stroke-width="1"/>
+
+              <!-- Fib level lines -->
+              <line x1="0" y1="38" x2="420" y2="38" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,4" opacity=".7"/>
+              <text x="4" y="35" fill="#ef4444" font-size="9" opacity=".8">78.6% SL</text>
+
+              <line x1="0" y1="72" x2="420" y2="72" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" opacity=".9"/>
+              <text x="4" y="69" fill="#fbbf24" font-size="9" opacity=".9">38.2% ★ Entry</text>
+
+              <line x1="0" y1="98" x2="420" y2="98" stroke="#f97316" stroke-width="1" stroke-dasharray="4,4" opacity=".7"/>
+              <text x="4" y="95" fill="#f97316" font-size="9" opacity=".8">61.8%</text>
+
+              <line x1="0" y1="18" x2="420" y2="18" stroke="#10b981" stroke-width="1" stroke-dasharray="4,4" opacity=".7"/>
+              <text x="4" y="15" fill="#10b981" font-size="9" opacity=".8">TP $158.80</text>
+
+              <!-- Candles (bearish retracement then bounce) -->
+              <g opacity=".9">
+                <!-- Rising candles -->
+                <rect x="20" y="100" width="8" height="30" fill="#10b981"/><line x1="24" y1="95" x2="24" y2="135" stroke="#10b981" stroke-width="1"/>
+                <rect x="35" y="88" width="8" height="25" fill="#10b981"/><line x1="39" y1="82" x2="39" y2="118" stroke="#10b981" stroke-width="1"/>
+                <rect x="50" y="75" width="8" height="20" fill="#10b981"/><line x1="54" y1="70" x2="54" y2="100" stroke="#10b981" stroke-width="1"/>
+                <rect x="65" y="62" width="8" height="18" fill="#10b981"/><line x1="69" y1="56" x2="69" y2="85" stroke="#10b981" stroke-width="1"/>
+                <rect x="80" y="52" width="8" height="15" fill="#10b981"/><line x1="84" y1="46" x2="84" y2="70" stroke="#10b981" stroke-width="1"/>
+                <!-- Peak -->
+                <rect x="95" y="48" width="8" height="10" fill="#ef4444"/><line x1="99" y1="44" x2="99" y2="62" stroke="#ef4444" stroke-width="1"/>
+                <!-- Retracement (bearish candles dropping toward fib) -->
+                <rect x="110" y="55" width="8" height="18" fill="#ef4444"/><line x1="114" y1="50" x2="114" y2="78" stroke="#ef4444" stroke-width="1"/>
+                <rect x="125" y="60" width="8" height="20" fill="#ef4444"/><line x1="129" y1="55" x2="129" y2="86" stroke="#ef4444" stroke-width="1"/>
+                <rect x="140" y="64" width="8" height="16" fill="#ef4444"/><line x1="144" y1="60" x2="144" y2="85" stroke="#ef4444" stroke-width="1"/>
+                <rect x="155" y="68" width="8" height="12" fill="#ef4444"/><line x1="159" y1="64" x2="159" y2="84" stroke="#ef4444" stroke-width="1"/>
+                <!-- Touch fib 38.2% line + bounce -->
+                <rect x="170" y="70" width="8" height="8" fill="#ef4444"/><line x1="174" y1="65" x2="174" y2="82" stroke="#ef4444" stroke-width="1"/>
+                <rect x="185" y="68" width="8" height="10" fill="#10b981"/><line x1="189" y1="62" x2="189" y2="80" stroke="#10b981" stroke-width="1"/>
+                <!-- Bounce up -->
+                <rect x="200" y="60" width="8" height="14" fill="#10b981"/><line x1="204" y1="55" x2="204" y2="78" stroke="#10b981" stroke-width="1"/>
+                <rect x="215" y="52" width="8" height="12" fill="#10b981"/><line x1="219" y1="46" x2="219" y2="68" stroke="#10b981" stroke-width="1"/>
+                <rect x="230" y="44" width="8" height="14" fill="#10b981"/><line x1="234" y1="38" x2="234" y2="62" stroke="#10b981" stroke-width="1"/>
+                <rect x="245" y="36" width="8" height="12" fill="#10b981"/><line x1="249" y1="30" x2="249" y2="52" stroke="#10b981" stroke-width="1"/>
+              </g>
+
+              <!-- Entry marker -->
+              <circle cx="189" cy="72" r="5" fill="#fbbf24" opacity=".9"/>
+              <text x="198" y="68" fill="#fbbf24" font-size="10" font-weight="bold">ENTRY</text>
+            </svg>
+          </div>
+
+          <div style="margin-top:10px;font-size:11px;color:#5c6068;">
+            Paper trade executed · SOL-PERP · Hermes v2 · 2026-05-17 14:32 UTC
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:20px;font-size:13px;color:#64748b;">The actual chart will be a real mplfinance candlestick PNG with Fib lines drawn on it — this mockup shows the layout. Does the alert format look good? Reply in terminal.</p>

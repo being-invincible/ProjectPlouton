@@ -114,12 +114,15 @@ class OrderManager:
                 })
 
                 duration = self._format_duration(trade.get("timestamp"))
-                await self.discord.send_close(
-                    coin=trade["instrument"], direction=trade["direction"],
-                    pnl=pnl, pnl_pct=pnl_pct, exit_reason=reason,
-                    confidence_at_entry=float(trade.get("confidence", 0)),
-                    duration_str=duration, png_bytes=final_chart or b"",
-                )
+                try:
+                    await self.discord.send_close(
+                        coin=trade["instrument"], direction=trade["direction"],
+                        pnl=pnl, pnl_pct=pnl_pct, exit_reason=reason,
+                        confidence_at_entry=float(trade.get("confidence", 0)),
+                        duration_str=duration, png_bytes=final_chart or b"",
+                    )
+                except Exception as e:
+                    logger.warning(f"discord notify failed for {trade_id}: {e}")
 
         self._update_bot_state()
 
@@ -176,12 +179,15 @@ class OrderManager:
                         "pnl": pnl,
                     })
                     duration = self._format_duration(trade.get("timestamp"))
-                    await self.discord.send_close(
-                        coin=trade["instrument"], direction=trade["direction"],
-                        pnl=pnl, pnl_pct=pnl_pct, exit_reason=reason,
-                        confidence_at_entry=float(trade.get("confidence", 0)),
-                        duration_str=duration, png_bytes=b"",
-                    )
+                    try:
+                        await self.discord.send_close(
+                            coin=trade["instrument"], direction=trade["direction"],
+                            pnl=pnl, pnl_pct=pnl_pct, exit_reason=reason,
+                            confidence_at_entry=float(trade.get("confidence", 0)),
+                            duration_str=duration, png_bytes=b"",
+                        )
+                    except Exception as e:
+                        logger.warning(f"backfill discord notify failed for {trade_id}: {e}")
 
         self._update_bot_state()
         logger.info("Backfill complete")

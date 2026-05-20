@@ -1,0 +1,49 @@
+<h2>3 Architecture Approaches</h2>
+<p class="subtitle">How should the bot scan 10 coins, generate charts, and send Discord alerts?</p>
+
+<div class="options">
+  <div class="option" data-choice="A" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Async Multi-Coin Scanner <span style="font-size:11px;background:rgba(59,130,246,0.2);color:#60a5fa;padding:2px 8px;border-radius:20px;margin-left:8px;">Recommended</span></h3>
+      <p>Bot scans all 10 coins in parallel using async tasks. Each coin runs its own MTF fetch → Fib analysis → signal check cycle. On signal: generate chart with mplfinance, POST to Discord webhook, then paper-trade. Sequential would take 10× longer per cycle.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul><li>All 10 coins analysed per 5m candle</li><li>No coin starves waiting for others</li><li>Clean, modular — one CoinScanner class per coin</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>More complex than sequential</li><li>Binance rate limits need care (handled by ccxt)</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="B" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Sequential Scanner (Simple Loop)</h3>
+      <p>Bot loops through coins one by one: fetch → analyse → signal? → alert → next coin. Simpler to reason about, easier to debug. With 10 coins and ~1s per fetch, one full cycle ≈ 10–15s, well within the 5m window.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul><li>Dead simple, no concurrency bugs</li><li>Easy to add debug logging per coin</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Slower (but still fast enough)</li><li>One slow API call delays all downstream coins</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="C" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Separate Processes per Coin</h3>
+      <p>Each coin runs as its own independent process with its own bot loop. True isolation — a crash on HYPE doesn't affect BTC. Overkill for 10 coins on a laptop but production-grade.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul><li>Full fault isolation</li><li>Easy to add/remove coins independently</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>10× resource usage</li><li>Complex process management</li><li>Much harder to build & debug</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px;padding:16px 20px;background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:12px;font-size:13px;color:#94a3b8;line-height:1.6;">
+  <strong style="color:#34d399;">All 3 approaches share the same stack:</strong><br>
+  • <strong>ccxt</strong> library → Binance public API for crypto OHLCV (replaces yfinance)<br>
+  • <strong>mplfinance</strong> → chart image generation (candlestick + Fib levels drawn on it)<br>
+  • <strong>Discord webhook</strong> → POST embed + chart image on signal<br>
+  • <strong>Same DuckDB + FastAPI + React</strong> architecture preserved<br>
+  • <strong>No market hours check</strong> — 24/7
+</div>

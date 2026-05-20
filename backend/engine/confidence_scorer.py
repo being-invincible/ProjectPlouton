@@ -25,9 +25,25 @@ class ConfidenceScorer:
         return max(0.0, min(95.0, score))
 
     def _mtf_alignment(self, mtf: dict, direction: str) -> float:
-        wanted = "UP" if direction == "LONG" else "DOWN"
-        aligned = sum(1 for tf in ("1h", "15m", "5m") if mtf.get(tf, {}).get("trend") == wanted)
-        return {3: 1.0, 2: 0.6, 1: 0.0, 0: 0.0}.get(aligned, 0.0)
+        wanted   = "UP"   if direction == "LONG" else "DOWN"
+        opposite = "DOWN" if direction == "LONG" else "UP"
+        tf_1h  = mtf.get("1h",  {}).get("trend")
+        tf_15m = mtf.get("15m", {}).get("trend")
+        tf_5m  = mtf.get("5m",  {}).get("trend")
+        # 1h sets the primary trend — must align.
+        if tf_1h != wanted:
+            return 0.0
+        # Classic golden pocket: 1h with us, 15m retracing, 5m bouncing back.
+        if tf_15m == opposite and tf_5m == wanted:
+            return 1.0
+        # All three aligned (momentum entry, less ideal for retracement but valid).
+        if tf_15m == wanted and tf_5m == wanted:
+            return 0.9
+        # 1h aligned, 15m retracing, 5m not yet confirmed.
+        if tf_15m == opposite:
+            return 0.65
+        # 1h and 15m aligned, 5m lagging.
+        return 0.7
 
     def _slope_strength(self, mtf: dict) -> float:
         slope = abs(mtf.get("1h", {}).get("slope", 0.0))

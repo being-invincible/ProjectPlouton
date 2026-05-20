@@ -1,0 +1,100 @@
+<h2>System Architecture</h2>
+<p class="subtitle">Project Hermes v2 — 10-coin async crypto perp scanner</p>
+
+<div class="mockup">
+  <div class="mockup-header">Data & Signal Flow</div>
+  <div class="mockup-body" style="font-family:monospace;font-size:13px;line-height:2;color:#94a3b8;">
+
+    <div style="display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr;gap:0;align-items:center;margin-bottom:24px;">
+      <!-- Col 1: Data Layer -->
+      <div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:10px;padding:14px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#3b82f6;margin-bottom:8px;">DATA LAYER</div>
+        <div style="color:#e2e8f0;font-weight:600;margin-bottom:4px;">Hyperliquid API</div>
+        <div style="font-size:12px;color:#64748b;">via ccxt library</div>
+        <div style="margin-top:10px;font-size:12px;color:#94a3b8;">
+          • 5m candles (execution TF)<br>
+          • 15m candles (confirmation)<br>
+          • 1h candles (trend filter)<br>
+          • 10 coins × 3 TF in parallel<br>
+          • No API key needed (public)
+        </div>
+      </div>
+      <div style="text-align:center;font-size:18px;color:#3b82f6;">→</div>
+      <!-- Col 2: Brain -->
+      <div style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.2);border-radius:10px;padding:14px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#a78bfa;margin-bottom:8px;">ANALYSIS ENGINE</div>
+        <div style="color:#e2e8f0;font-weight:600;margin-bottom:4px;">Async CoinScanner</div>
+        <div style="font-size:12px;color:#64748b;">10 coins in parallel</div>
+        <div style="margin-top:10px;font-size:12px;color:#94a3b8;">
+          • MTF trend gate (1h must agree)<br>
+          • Fibonacci Retracement<br>
+          • 38.2% / 61.8% entry zones<br>
+          • Quality filter (rejects noise)<br>
+          • Position size calculator
+        </div>
+      </div>
+      <div style="text-align:center;font-size:18px;color:#a78bfa;">→</div>
+      <!-- Col 3: Output -->
+      <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius:10px;padding:14px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#10b981;margin-bottom:8px;">OUTPUT</div>
+        <div style="color:#e2e8f0;font-weight:600;margin-bottom:4px;">Alert + Trade</div>
+        <div style="font-size:12px;color:#64748b;">Discord + DuckDB</div>
+        <div style="margin-top:10px;font-size:12px;color:#94a3b8;">
+          • Discord embed + chart image<br>
+          • Paper trade executed<br>
+          • Stored in DuckDB<br>
+          • Dashboard updated<br>
+          • SL/TP monitoring loop
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:4px;">
+      <!-- Position Sizing -->
+      <div style="background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.15);border-radius:10px;padding:14px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#f59e0b;margin-bottom:8px;">POSITION SIZING (risk-aware)</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.8;">
+          Risk per trade: 1% of balance<br>
+          Max open trades: 3 concurrent<br>
+          Max daily loss: 5% hard stop<br>
+          Leverage: auto-calc (max 10×)<br>
+          <span style="color:#fbbf24;">Formula: qty = (balance × 1%) ÷ (entry − SL)</span>
+        </div>
+      </div>
+      <!-- Discord Alert -->
+      <div style="background:rgba(88,101,242,0.07);border:1px solid rgba(88,101,242,0.2);border-radius:10px;padding:14px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#818cf8;margin-bottom:8px;">DISCORD ALERT FORMAT</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.8;">
+          📌 <strong style="color:#e2e8f0;">SOL/USDC LONG</strong> — Fib 38.2% entry<br>
+          1h trend: ↑ BULLISH (stacked MTF)<br>
+          Entry: $145.20 | SL: $138.40 | TP: $158.80<br>
+          R:R 2.0 | Risk $5.00 (1%) | Qty: 0.035<br>
+          <span style="color:#818cf8;">📊 [chart image attached]</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:14px;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#475569;margin-bottom:8px;">PRESERVED FROM V1</div>
+      <div style="font-size:12px;color:#64748b;display:flex;gap:32px;">
+        <span>✅ DuckDB data store</span>
+        <span>✅ FastAPI server</span>
+        <span>✅ React dashboard</span>
+        <span>✅ Paper broker logic</span>
+        <span>✅ Risk manager</span>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.15);border-radius:10px;padding:14px;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#ef4444;margin-bottom:8px;">REMOVED FROM V1 (dead weight)</div>
+      <div style="font-size:12px;color:#64748b;display:flex;gap:32px;">
+        <span>❌ yfinance (→ ccxt/HL)</span>
+        <span>❌ CME market hours check</span>
+        <span>❌ PocketBase client</span>
+        <span>❌ GC=F Gold Futures config</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:20px;font-size:13px;color:#64748b;">Does this architecture look right? Reply in terminal — next section covers the Discord alert format and chart design.</p>
