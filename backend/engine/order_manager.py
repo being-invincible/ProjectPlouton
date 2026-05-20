@@ -74,9 +74,11 @@ class OrderManager:
                 trade = self.store.get_trade(trade_id)
 
                 if reason == "TP1_PARTIAL":
+                    original_margin = float(trade.get("initial_margin") or 0)
                     self.store.update_trade(trade_id, {
                         "tp1_hit": True,
                         "stop_loss": trade["entry_price"],
+                        "initial_margin": original_margin * 0.5,
                     })
                     continue
 

@@ -46,7 +46,7 @@ def test_tp1_partial_writes_entry_price_as_new_stop_loss():
     asyncio.run(om.check_open_trades())
 
     store.update_trade.assert_called_once_with(
-        trade_id, {"tp1_hit": True, "stop_loss": entry_price}
+        trade_id, {"tp1_hit": True, "stop_loss": entry_price, "initial_margin": 0.0}
     )
 
 
@@ -70,3 +70,31 @@ def test_tp1_partial_does_not_write_tp1_price_as_stop_loss():
 
     call_args = store.update_trade.call_args
     assert call_args[0][1]["stop_loss"] != tp1_price
+
+
+def test_tp1_partial_halves_initial_margin_in_db():
+    """After TP1 partial close, DB initial_margin must be halved so rehydration deducts correctly."""
+    om, broker, store, _, fetcher = _make_om()
+
+    trade_id = "trade-margin"
+    entry_price = 100.0
+    tp1_price = 110.0
+    original_margin = 96.0
+
+    store.list_open_trades.return_value = [
+        {"instrument": "BTC", "id": trade_id, "entry_price": entry_price}
+    ]
+    store.get_trade.return_value = {
+        "id": trade_id, "entry_price": entry_price, "initial_margin": original_margin
+    }
+    store.list_all_trades.return_value = []
+    fetcher.fetch_ohlcv.return_value = _price_df(111.0)
+    broker.check_exits.return_value = [(trade_id, "TP1_PARTIAL", tp1_price, 5.0)]
+
+    asyncio.run(om.check_open_trades())
+
+    call_args = store.update_trade.call_args
+    update_dict = call_args[0][1]
+    assert update_dict["tp1_hit"] is True
+    assert update_dict["stop_loss"] == pytest.approx(entry_price)
+    assert update_dict["initial_margin"] == pytest.approx(original_margin * 0.5)
