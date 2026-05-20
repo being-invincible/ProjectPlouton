@@ -223,20 +223,21 @@ class OrderManager:
         )
 
     def _update_bot_state(self) -> None:
-        """Recompute and persist balance + win counts."""
-        trades = self.store.list_all_trades()
+        """Recompute and persist balance + win counts. Backtest trades excluded — paper only."""
+        all_trades = self.store.list_all_trades()
+        trades = [t for t in all_trades if (t.get("trade_type") or "paper") == "paper"]
         closed = [t for t in trades if t.get("status") == "CLOSED"]
         total_pnl = sum(float(t.get("pnl") or 0) for t in closed)
         wins = sum(1 for t in closed if float(t.get("pnl") or 0) > 0)
 
-        # Balance = initial + all closed PnL - margin locked in open trades
+        # Balance = initial + closed paper PnL - margin locked in open paper trades
         open_margin = sum(
             float(t.get("initial_margin") or 0)
             for t in trades if t.get("status") == "OPEN"
         )
         balance = self.broker.initial_balance + total_pnl - open_margin
 
-        # Daily PnL = trades entered today (UTC)
+        # Daily PnL = paper trades entered today (UTC)
         today = datetime.now(timezone.utc).date().isoformat()
         daily_pnl = sum(
             float(t.get("pnl") or 0) for t in closed

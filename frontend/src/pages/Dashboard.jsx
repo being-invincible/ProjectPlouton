@@ -126,7 +126,6 @@ export default function Dashboard() {
     );
   }
 
-  const balance = botState?.balance ?? 200;
   const initialBalance = botState?.initial_balance ?? 200;
   const activeCoins = monitorData.filter(c => c.has_data).length;
 
@@ -137,8 +136,19 @@ export default function Dashboard() {
   const typedTotalPnl = typedClosed.reduce((sum, t) => sum + (t.pnl || 0), 0);
   const typedWinRate = typedClosed.length ? (typedWins / typedClosed.length) * 100 : 0;
 
+  // Balance and daily PnL computed from type-filtered trades so selector affects all KPIs
+  const typedOpenMargin = typedTrades
+    .filter(t => t.status === 'OPEN')
+    .reduce((sum, t) => sum + (t.initial_margin || 0), 0);
+  const balance = initialBalance + typedTotalPnl - typedOpenMargin;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const typedDailyPnl = typedClosed
+    .filter(t => (t.timestamp || '').slice(0, 10) === today)
+    .reduce((sum, t) => sum + (t.pnl || 0), 0);
+
   const pnlFormatted = formatPnL(typedTotalPnl);
-  const dailyPnl = formatPnL(botState?.daily_pnl ?? 0);
+  const dailyPnl = formatPnL(typedDailyPnl);
 
   // Recent trades list (capped at 15)
   const filteredTrades = typedTrades.slice(0, 15);
@@ -167,7 +177,7 @@ export default function Dashboard() {
           value={formatCurrency(balance)}
           color="#3b82f6"
           highlighted
-          subValue={{ text: 'Paper trading', color: '#3b82f6' }}
+          subValue={{ text: TYPE_LABELS[tradeType] || tradeType, color: '#3b82f6' }}
           delay={0.04}
         />
         <StatCard
@@ -214,11 +224,11 @@ export default function Dashboard() {
       }}>
         {/* Today P&L */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-          <Activity style={{ width: '14px', height: '14px', color: botState?.daily_pnl >= 0 ? '#10b981' : '#ef4444', flexShrink: 0 }} />
+          <Activity style={{ width: '14px', height: '14px', color: typedDailyPnl >= 0 ? '#10b981' : '#ef4444', flexShrink: 0 }} />
           <span style={{ fontSize: '11px', color: '#475569', fontWeight: 500 }}>Today</span>
           <span style={{
             fontSize: '16px', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace',
-            color: botState?.daily_pnl >= 0 ? '#10b981' : '#ef4444', letterSpacing: '-0.02em',
+            color: typedDailyPnl >= 0 ? '#10b981' : '#ef4444', letterSpacing: '-0.02em',
           }}>
             {dailyPnl.text}
           </span>
