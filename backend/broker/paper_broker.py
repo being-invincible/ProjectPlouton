@@ -41,6 +41,29 @@ class PaperBroker:
     async def disconnect(self) -> None:
         logger.info("Paper broker disconnected")
 
+    def rehydrate(self, open_trades: list[dict]) -> None:
+        """Reconstruct in-memory positions from DB rows after a bot restart."""
+        for t in open_trades:
+            trade_id = str(t["id"])
+            self.positions[trade_id] = PaperPosition(
+                trade_id=trade_id,
+                coin=str(t["instrument"]),
+                direction=str(t["direction"]),
+                entry_price=float(t["entry_price"]),
+                quantity=float(t["quantity"]),
+                initial_quantity=float(t["quantity"]),
+                stop_loss=float(t["stop_loss"]),
+                tp1=float(t.get("tp1_price") or t.get("take_profit", 0)),
+                tp2=float(t.get("tp2_price") or t.get("take_profit", 0)),
+                notional=float(t.get("notional") or 0),
+                leverage=int(t.get("leverage") or 1),
+                initial_margin=float(t.get("initial_margin") or 0),
+                liquidation_price=float(t.get("liquidation_price") or 0),
+                funding_rate_hr=float(t.get("funding_rate_hr") or 0),
+                tp1_hit=bool(t.get("tp1_hit") or False),
+            )
+        logger.info(f"Rehydrated {len(open_trades)} open position(s) from DB")
+
     def open_position(self, *, coin: str, direction: str, entry: float, quantity: float,
                       stop_loss: float, tp1: float, tp2: float, notional: float, leverage: int,
                       initial_margin: float, liquidation_price: float, funding_rate_hr: float) -> str:

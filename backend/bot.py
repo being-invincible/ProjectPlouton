@@ -30,66 +30,101 @@ logging.basicConfig(
 logger = logging.getLogger("Plouton")
 
 
-async def main() -> None:
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "tradingbot.duckdb")
-    store = DuckDBStore(db_path)
+class TradingBot:
+    """Plouton trading bot — wraps the async scanner loop."""
 
-    fetcher = HyperliquidFetcher()
-    strategy = GoldenPocketStrategy()
-    scorer = ConfidenceScorer()
-    sizer = PositionSizer(risk_per_trade_pct=settings.risk_per_trade_pct)
-    qf = QualityFilter(
-        daily_loss_limit_pct=settings.daily_loss_limit_pct,
-        max_open_trades=settings.max_open_trades,
-        min_confidence_pct=settings.min_confidence_pct,
-    )
-    chart_gen = ChartGenerator(width=settings.chart_width_px, height=settings.chart_height_px)
-    discord = DiscordNotifier(webhook_url=settings.discord_webhook_url)
+    def __init__(self):
+        self._duckdb_store: DuckDBStore | None = None
+        self._broker: PaperBroker | None = None
+        self._order_mgr: OrderManager | None = None
+        self._runner: AsyncRunner | None = None
 
-    broker = PaperBroker(initial_balance=settings.paper_balance)
-    await broker.connect()
-    order_mgr = OrderManager(broker=broker, duckdb_store=store, discord=discord, chart_generator=chart_gen, fetcher=fetcher)
-
-    scanners = [
-        CoinScanner(
-            coin=coin, fetcher=fetcher, strategy=strategy,
-            confidence_scorer=scorer, position_sizer=sizer, chart_generator=chart_gen,
-            discord=discord, duckdb_store=store, paper_broker=broker,
-            order_manager=order_mgr, quality_filter=qf,
+    async def initialize(self) -> None:
+        db_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "tradingbot.duckdb"
         )
-        for coin in settings.coins
-    ]
-    runner = AsyncRunner(scanners)
+        self._duckdb_store = DuckDBStore(db_path)
 
-    store.update_bot_state({
-        "status": "RUNNING",
-        "trading_mode": "paper",
-        "initial_balance": settings.paper_balance,
-        "last_updated": datetime.now(timezone.utc).isoformat(),
-    })
+        fetcher = HyperliquidFetcher()
+        strategy = GoldenPocketStrategy()
+        scorer = ConfidenceScorer()
+        sizer = PositionSizer(risk_per_trade_pct=settings.risk_per_trade_pct)
+        qf = QualityFilter(
+            daily_loss_limit_pct=settings.daily_loss_limit_pct,
+            max_open_trades=settings.max_open_trades,
+            min_confidence_pct=settings.min_confidence_pct,
+        )
+        chart_gen = ChartGenerator(width=settings.chart_width_px, height=settings.chart_height_px)
+        discord = DiscordNotifier(webhook_url=settings.discord_webhook_url)
 
-    logger.info(f"Plouton started — coins: {', '.join(settings.coins)}")
+        self._broker = PaperBroker(initial_balance=settings.paper_balance)
+        await self._broker.connect()
 
-    try:
-        while True:
-            cycle_start = datetime.now(timezone.utc)
-            logger.info(f"--- cycle start {cycle_start.isoformat()} ---")
+        open_trades = self._duckdb_store.list_open_trades()
+        self._broker.rehydrate(open_trades)
+        if open_trades:
+            logger.info(f"Restored {len(open_trades)} open position(s) from previous session")
 
-            await order_mgr.check_open_trades()
+        self._order_mgr = OrderManager(
+            broker=self._broker,
+            duckdb_store=self._duckdb_store,
+            discord=discord,
+            chart_generator=chart_gen,
+            fetcher=fetcher,
+        )
 
-            trade_ids = await runner.run_one_cycle()
-            if trade_ids:
-                logger.info(f"executed {len(trade_ids)} trades this cycle: {trade_ids}")
+        scanners = [
+            CoinScanner(
+                coin=coin, fetcher=fetcher, strategy=strategy,
+                confidence_scorer=scorer, position_sizer=sizer, chart_generator=chart_gen,
+                discord=discord, duckdb_store=self._duckdb_store, paper_broker=self._broker,
+                order_manager=self._order_mgr, quality_filter=qf,
+            )
+            for coin in settings.coins
+        ]
+        self._runner = AsyncRunner(scanners)
 
-            store.update_bot_state({"last_heartbeat": datetime.now(timezone.utc).isoformat()})
+        self._duckdb_store.update_bot_state({
+            "status": "RUNNING",
+            "trading_mode": "paper",
+            "initial_balance": settings.paper_balance,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info(f"Plouton initialized — coins: {', '.join(settings.coins)}")
 
-            await asyncio.sleep(300)
-    except KeyboardInterrupt:
-        logger.info("Stopped by user")
-    finally:
-        await broker.disconnect()
-        store.update_bot_state({"status": "STOPPED"})
-        store.close()
+    async def run(self) -> None:
+        if self._duckdb_store is None or self._runner is None:
+            raise RuntimeError("Call initialize() before run()")
+        try:
+            while True:
+                cycle_start = datetime.now(timezone.utc)
+                logger.info(f"--- cycle start {cycle_start.isoformat()} ---")
+
+                await self._order_mgr.check_open_trades()
+
+                trade_ids = await self._runner.run_one_cycle()
+                if trade_ids:
+                    logger.info(f"executed {len(trade_ids)} trades this cycle: {trade_ids}")
+
+                self._duckdb_store.update_bot_state({
+                    "last_heartbeat": datetime.now(timezone.utc).isoformat()
+                })
+
+                await asyncio.sleep(300)
+        except KeyboardInterrupt:
+            logger.info("Stopped by user")
+        finally:
+            if self._broker:
+                await self._broker.disconnect()
+            if self._duckdb_store:
+                self._duckdb_store.update_bot_state({"status": "STOPPED"})
+                self._duckdb_store.close()
+
+
+async def main() -> None:
+    bot = TradingBot()
+    await bot.initialize()
+    await bot.run()
 
 
 if __name__ == "__main__":
