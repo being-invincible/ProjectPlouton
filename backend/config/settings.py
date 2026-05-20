@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     daily_loss_limit_pct: float = 0.15
 
     # Strategy
-    min_confidence_pct: float = 60.0
+    min_confidence_pct: float = 50.0
     execution_tf_default: str = "5m"
     confirmation_tf: str = "15m"
     trend_tf: str = "1h"

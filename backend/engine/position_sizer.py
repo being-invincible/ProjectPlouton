@@ -43,8 +43,10 @@ class PositionSizer:
         quantity = risk_amount / stop_distance
         notional = quantity * entry
 
-        # Suggested leverage = ceil(notional / balance), capped per coin
-        raw_leverage = max(1, math.ceil(notional / balance))
+        # Target leverage keeps initial_margin ≈ risk_amount (not full notional).
+        # ceil(notional/balance) gave 1x when notional < balance, forcing margin = notional
+        # and burning most of the account on a single trade.
+        raw_leverage = max(1, math.ceil(notional / risk_amount))
         suggested_leverage = min(raw_leverage, max_leverage_for_coin)
 
         initial_margin = notional / suggested_leverage
