@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.plouton.bot</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/hash/Documents/GitHub/ProjectHermes/.venv/bin/python3</string>
+    <string>/Users/hash/Documents/GitHub/ProjectHermes/run.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/hash/Documents/GitHub/ProjectHermes</string>
+
+  <!-- Restart automatically if it crashes or is stopped -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Run when launchd loads (login / wake from sleep) -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Log stdout/stderr -->
+  <key>StandardOutPath</key>
+  <string>/Users/hash/Documents/GitHub/ProjectHermes/logs/plouton.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/hash/Documents/GitHub/ProjectHermes/logs/plouton.err</string>
+
+  <!-- Throttle restarts to avoid tight crash loops -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+</dict>
+</plist>

@@ -8,8 +8,11 @@
 
 # Logs
 *.log
+*.err
 backend_log.txt
 frontend_log.txt
+logs/
+!logs/.gitkeep
 
 # Python
 __pycache__/

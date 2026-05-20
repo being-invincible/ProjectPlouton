@@ -84,6 +84,9 @@ class TradingBot:
         ]
         self._runner = AsyncRunner(scanners)
 
+        if open_trades:
+            await self._order_mgr.backfill_missed_exits()
+
         self._duckdb_store.update_bot_state({
             "status": "RUNNING",
             "trading_mode": "paper",

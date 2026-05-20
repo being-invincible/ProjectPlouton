@@ -123,6 +123,69 @@ class OrderManager:
 
         self._update_bot_state()
 
+    async def backfill_missed_exits(self) -> None:
+        """Replay recent candles to close positions that should have exited while bot was down."""
+        open_trades = self.store.list_open_trades()
+        if not open_trades:
+            return
+        coins = {t["instrument"] for t in open_trades}
+        logger.info(f"Backfilling exits for {len(coins)} coin(s): {coins}")
+
+        for coin in coins:
+            try:
+                df = self.fetcher.fetch_ohlcv(coin, "5m", limit=500)
+            except Exception as e:
+                logger.warning(f"backfill fetch failed for {coin}: {e}")
+                continue
+
+            for _, row in df.iterrows():
+                closures = self.broker.check_exits_candle(
+                    coin, high=float(row["High"]), low=float(row["Low"])
+                )
+                for trade_id, reason, exit_price, pnl in closures:
+                    trade = self.store.get_trade(trade_id)
+                    if trade is None:
+                        continue
+
+                    if reason == "TP1_PARTIAL":
+                        original_margin = float(trade.get("initial_margin") or 0)
+                        margin_update = {"initial_margin": original_margin * 0.5} if original_margin > 0 else {}
+                        self.store.update_trade(trade_id, {
+                            "tp1_hit": True,
+                            "stop_loss": trade["entry_price"],
+                            **margin_update,
+                        })
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        self.store.insert_trade_event({
+                            "id": str(uuid.uuid4()), "trade_id": trade_id,
+                            "event_type": "TP1_PARTIAL", "price": exit_price,
+                            "pnl_partial": pnl, "timestamp": now_iso,
+                        })
+                        self.store.insert_trade_event({
+                            "id": str(uuid.uuid4()), "trade_id": trade_id,
+                            "event_type": "SL_MOVED", "price": float(trade["entry_price"]),
+                            "pnl_partial": None, "timestamp": now_iso,
+                        })
+                        continue
+
+                    pnl_pct = (pnl / float(trade.get("initial_margin", 1.0))) * 100 if trade.get("initial_margin") else 0.0
+                    self.store.update_trade(trade_id, {
+                        "status": "CLOSED",
+                        "exit_price": exit_price,
+                        "exit_reason": reason,
+                        "pnl": pnl,
+                    })
+                    duration = self._format_duration(trade.get("timestamp"))
+                    await self.discord.send_close(
+                        coin=trade["instrument"], direction=trade["direction"],
+                        pnl=pnl, pnl_pct=pnl_pct, exit_reason=reason,
+                        confidence_at_entry=float(trade.get("confidence", 0)),
+                        duration_str=duration, png_bytes=b"",
+                    )
+
+        self._update_bot_state()
+        logger.info("Backfill complete")
+
     async def _regenerate_chart_for_trade(self, trade: dict, exit_price: float, reason: str) -> bytes:
         from backend.strategy.golden_pocket import Signal
         import pandas as pd

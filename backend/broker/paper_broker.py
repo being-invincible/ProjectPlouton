@@ -139,6 +139,54 @@ class PaperBroker:
         self.balance += pnl + pos.initial_margin   # return margin on close
         logger.info(f"CLOSED {pos.direction} {pos.coin} pnl=${pnl:.2f} margin_returned=${pos.initial_margin:.2f} balance=${self.balance:.2f}")
 
+    def check_exits_candle(self, coin: str, high: float, low: float) -> list[tuple[str, str, float, float]]:
+        """OHLC-aware exit check for backfill replay.
+
+        Uses candle low for SL (LONG) / high for SL (SHORT) — simulates worst-case wick.
+        Uses candle high for TP (LONG) / low for TP (SHORT).
+        SL is evaluated before TP within a candle (conservative assumption).
+        """
+        closures = []
+        for trade_id, pos in list(self.positions.items()):
+            if pos.coin != coin:
+                continue
+
+            if pos.direction == "LONG":
+                sl_hit   = low  <= pos.stop_loss
+                tp1_hit  = high >= pos.tp1
+                tp2_hit  = high >= pos.tp2
+                pnl_sl   = (pos.stop_loss - pos.entry_price) * pos.quantity
+            else:
+                sl_hit   = high >= pos.stop_loss
+                tp1_hit  = low  <= pos.tp1
+                tp2_hit  = low  <= pos.tp2
+                pnl_sl   = (pos.entry_price - pos.stop_loss) * pos.quantity
+
+            if sl_hit:
+                closures.append((trade_id, "SL", pos.stop_loss, pnl_sl))
+                self._close_full(trade_id, pnl_sl)
+                continue
+
+            if not pos.tp1_hit and tp1_hit:
+                half = pos.initial_quantity * 0.5
+                pnl_partial = (pos.tp1 - pos.entry_price) * half if pos.direction == "LONG" \
+                              else (pos.entry_price - pos.tp1) * half
+                half_margin = pos.initial_margin * 0.5
+                pos.quantity      -= half
+                pos.tp1_hit        = True
+                pos.stop_loss      = pos.entry_price
+                pos.initial_margin = half_margin
+                self.balance      += pnl_partial + half_margin
+                closures.append((trade_id, "TP1_PARTIAL", pos.tp1, pnl_partial))
+
+            if pos.tp1_hit and tp2_hit:
+                pnl = (pos.tp2 - pos.entry_price) * pos.quantity if pos.direction == "LONG" \
+                      else (pos.entry_price - pos.tp2) * pos.quantity
+                closures.append((trade_id, "TP2", pos.tp2, pnl))
+                self._close_full(trade_id, pnl)
+
+        return closures
+
     def update_positions(self, coin: str, current_price: float) -> list[tuple[str, str, float, float]]:
         """Convenience entry — same as check_exits."""
         return self.check_exits(coin, current_price)
