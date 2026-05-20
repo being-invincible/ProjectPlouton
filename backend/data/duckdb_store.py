@@ -470,11 +470,17 @@ class DuckDBStore:
                     "price": 0, "candles": 0,
                 }
 
-        # Determine stack consensus
-        trends = [v["trend"] for v in result.values() if v["trend"] != "UNKNOWN"]
-        if len(trends) >= 2 and len(set(trends)) == 1:
+        # Stack consensus uses only anchor (1h) + confirmation (15m).
+        # The execution frame (5m) is where the pullback *entry* forms — requiring
+        # it to agree with the macro trend would block almost every valid trade.
+        anchor_trends = [
+            result[tf]["trend"]
+            for tf in ("1h", "15m")
+            if result.get(tf, {}).get("trend") not in (None, "UNKNOWN")
+        ]
+        if len(anchor_trends) == 2 and len(set(anchor_trends)) == 1:
             stacked = True
-            direction = trends[0]
+            direction = anchor_trends[0]
         else:
             stacked = False
             direction = "MIXED"

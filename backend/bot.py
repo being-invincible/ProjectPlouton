@@ -57,7 +57,12 @@ class TradingBot:
         chart_gen = ChartGenerator(width=settings.chart_width_px, height=settings.chart_height_px)
         discord = DiscordNotifier(webhook_url=settings.discord_webhook_url)
 
-        self._broker = PaperBroker(initial_balance=settings.paper_balance)
+        # Use DB-persisted balance if available so dashboard settings survive restarts.
+        # Fall back to settings.paper_balance only on a fresh install (no DB record yet).
+        saved_state = self._duckdb_store.get_bot_state() or {}
+        saved_balance = float(saved_state.get("balance") or 0) or settings.paper_balance
+
+        self._broker = PaperBroker(initial_balance=saved_balance)
         await self._broker.connect()
 
         open_trades = self._duckdb_store.list_open_trades()
@@ -87,12 +92,15 @@ class TradingBot:
         if open_trades:
             await self._order_mgr.backfill_missed_exits()
 
-        self._duckdb_store.update_bot_state({
+        startup_update = {
             "status": "RUNNING",
             "trading_mode": "paper",
-            "initial_balance": settings.paper_balance,
             "last_updated": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        # Preserve initial_balance if already set; only write it on first-ever run.
+        if not float(saved_state.get("initial_balance") or 0):
+            startup_update["initial_balance"] = saved_balance
+        self._duckdb_store.update_bot_state(startup_update)
         logger.info(f"Plouton initialized — coins: {', '.join(settings.coins)}")
 
     async def run(self) -> None:

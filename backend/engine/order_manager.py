@@ -226,15 +226,21 @@ class OrderManager:
         """Recompute and persist balance + win counts."""
         trades = self.store.list_all_trades()
         closed = [t for t in trades if t.get("status") == "CLOSED"]
-        total_pnl = sum(float(t.get("pnl") or 0) for t in closed)
         wins = sum(1 for t in closed if float(t.get("pnl") or 0) > 0)
+
+        # Daily PnL: only count trades whose exit fell on today's UTC date
+        today = datetime.now(timezone.utc).date().isoformat()
+        today_closed = [
+            t for t in closed
+            if str(t.get("exit_timestamp") or t.get("timestamp") or "")[:10] == today
+        ]
+        daily_pnl = sum(float(t.get("pnl") or 0) for t in today_closed)
 
         self.store.update_bot_state({
             "balance": self.broker.balance,
-            "initial_balance": self.broker.initial_balance,
             "total_trades": len(closed),
             "winning_trades": wins,
-            "daily_pnl": total_pnl,
+            "daily_pnl": daily_pnl,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         })
 
