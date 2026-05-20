@@ -45,13 +45,16 @@ class PaperBroker:
         """Reconstruct in-memory positions from DB rows after a bot restart."""
         for t in open_trades:
             trade_id = str(t["id"])
+            qty = float(t["quantity"])
+            tp1_hit = bool(t.get("tp1_hit") or False)
+            initial_qty = qty * 2 if tp1_hit else qty
             self.positions[trade_id] = PaperPosition(
                 trade_id=trade_id,
                 coin=str(t["instrument"]),
                 direction=str(t["direction"]),
                 entry_price=float(t["entry_price"]),
-                quantity=float(t["quantity"]),
-                initial_quantity=float(t["quantity"]),
+                quantity=qty,
+                initial_quantity=initial_qty,
                 stop_loss=float(t["stop_loss"]),
                 tp1=float(t.get("tp1_price") or t.get("take_profit", 0)),
                 tp2=float(t.get("tp2_price") or t.get("take_profit", 0)),
@@ -60,7 +63,7 @@ class PaperBroker:
                 initial_margin=float(t.get("initial_margin") or 0),
                 liquidation_price=float(t.get("liquidation_price") or 0),
                 funding_rate_hr=float(t.get("funding_rate_hr") or 0),
-                tp1_hit=bool(t.get("tp1_hit") or False),
+                tp1_hit=tp1_hit,
             )
         logger.info(f"Rehydrated {len(open_trades)} open position(s) from DB")
 

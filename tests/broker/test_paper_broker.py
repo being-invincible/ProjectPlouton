@@ -58,6 +58,25 @@ def test_rehydrate_multiple_positions():
     assert "t2" in broker.positions
 
 
+def test_rehydrated_tp1_hit_position_does_not_fire_second_tp1():
+    """A rehydrated position with tp1_hit=True must skip the TP1 check."""
+    broker = PaperBroker(initial_balance=200.0)
+    broker.rehydrate([
+        {
+            "id": "t1", "instrument": "BTC", "direction": "LONG",
+            "entry_price": 100.0, "quantity": 1.0, "stop_loss": 100.0,
+            "tp1_price": 110.0, "tp2_price": 120.0, "take_profit": 120.0,
+            "tp1_hit": True,  # TP1 already fired — quantity is already halved
+            "notional": 100.0, "leverage": 1,
+            "initial_margin": 100.0, "liquidation_price": 80.0, "funding_rate_hr": 0.0,
+        }
+    ])
+    # Price crosses TP1 level — must NOT fire TP1_PARTIAL again
+    closures = broker.check_exits("BTC", current_price=111.0)
+    tp1_closures = [c for c in closures if c[1] == "TP1_PARTIAL"]
+    assert tp1_closures == [], "TP1_PARTIAL must not fire again for a rehydrated tp1_hit position"
+
+
 def test_rehydrated_position_exits_at_stop_loss():
     """After rehydration, check_exits must close a position that hits SL."""
     broker = PaperBroker(initial_balance=200.0)
