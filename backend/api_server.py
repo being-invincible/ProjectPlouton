@@ -9,10 +9,11 @@ so the frontend needs zero URL changes).
 import json
 import logging
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -25,6 +26,17 @@ from data.duckdb_store import DuckDBStore
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Plouton API", version="2.0")
+
+
+@app.exception_handler(AttributeError)
+async def none_store_handler(request, exc):
+    if "NoneType" in str(exc):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Database not available. Start the bot first.", "bot_started": False},
+        )
+    raise exc
+
 
 # CORS for the React dev server
 app.add_middleware(
@@ -39,6 +51,20 @@ app.add_middleware(
 _store: DuckDBStore | None = None
 _shared_store: DuckDBStore | None = None
 
+# Bot subprocess (when started via the UI)
+_bot_process: subprocess.Popen | None = None
+_RUN_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "run.py")
+
+# Sentinel set by run.py when the bot is running in the same process.
+# Prevents the UI "Start" button from spawning a duplicate subprocess after
+# the laptop wakes from sleep (heartbeat goes stale but bot is still alive).
+_bot_running_in_process: bool = False
+
+
+def set_bot_running_in_process(running: bool) -> None:
+    global _bot_running_in_process
+    _bot_running_in_process = running
+
 
 def set_store(store: DuckDBStore | None) -> None:
     """Optionally inject a shared DuckDB store (used by in-process runner)."""
@@ -46,7 +72,7 @@ def set_store(store: DuckDBStore | None) -> None:
     _shared_store = store
 
 
-def get_store() -> DuckDBStore:
+def get_store() -> DuckDBStore | None:
     if _shared_store is not None:
         return _shared_store
 
@@ -56,7 +82,12 @@ def get_store() -> DuckDBStore:
             os.path.dirname(os.path.abspath(__file__)),
             "data", "tradingbot.duckdb",
         )
-        _store = DuckDBStore(db_path, read_only=True)
+        # Standalone API opens read-only so the bot subprocess can hold the write lock.
+        # If the DB doesn't exist yet (first run), _store stays None until bot creates it.
+        try:
+            _store = DuckDBStore(db_path, read_only=True)
+        except Exception:
+            _store = None
     return _store
 
 
@@ -88,6 +119,12 @@ def _clean(records):
 
 
 def _parse_iso_ts(value) -> datetime | None:
+    try:
+        import pandas as pd
+        if pd.isnull(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     if not value:
         return None
     if isinstance(value, datetime):
@@ -107,12 +144,80 @@ class SettingsPatch(BaseModel):
     force_market_open: bool | None = None
 
 
+class BacktestTradePayload(BaseModel):
+    instrument: str
+    direction: str                       # LONG | SHORT
+    entry_price: float
+    stop_loss: float
+    tp1_price: float
+    tp2_price: float
+    exit_price: float
+    pnl: float
+    quantity: float
+    notional: float
+    leverage: int
+    initial_margin: float
+    liquidation_price: float | None = None
+    swing_high: float | None = None
+    swing_low: float | None = None
+    fib_zone_upper: float | None = None
+    fib_zone_lower: float | None = None
+    fib_level_triggered: float | None = None
+    rr_tp1: float | None = None
+    rr_tp2: float | None = None
+    confidence: float | None = None
+    timestamp: str                       # ISO8601
+    exit_timestamp: str | None = None
+    analysis_notes: str | None = None
+
+
 # ── Health ───────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
     store = get_store()
-    return {"code": 200, "message": "OK", "data": {"duckdb": store.health_check()}}
+    db_ok = store.health_check() if store else False
+    return {"code": 200, "message": "OK", "data": {"duckdb": db_ok}}
+
+
+# ── Bot Process Control ──────────────────────────────────────────
+
+def _bot_process_alive() -> bool:
+    return _bot_process is not None and _bot_process.poll() is None
+
+
+@app.post("/api/bot/start")
+async def bot_start():
+    global _bot_process
+    if _bot_running_in_process:
+        return {"ok": True, "status": "already_running_in_process"}
+    if _bot_process_alive():
+        return {"ok": True, "status": "already_running", "pid": _bot_process.pid}
+    try:
+        _bot_process = subprocess.Popen(
+            [sys.executable, os.path.abspath(_RUN_PY), "--no-api"],
+            cwd=os.path.dirname(os.path.abspath(_RUN_PY)),
+        )
+        return {"ok": True, "status": "started", "pid": _bot_process.pid}
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
+@app.post("/api/bot/stop")
+async def bot_stop():
+    global _bot_process
+    if not _bot_process_alive():
+        return {"ok": True, "status": "not_running"}
+    try:
+        _bot_process.terminate()
+        try:
+            _bot_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _bot_process.kill()
+        _bot_process = None
+        return {"ok": True, "status": "stopped"}
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
 # ── Bot State ────────────────────────────────────────────────────
@@ -137,7 +242,9 @@ async def get_runtime():
     # 5m cycle by default. Consider alive up to 2 cycles (+ buffer) without heartbeat.
     alive_threshold_sec = 660
     status = str(state.get("status", "STOPPED")).upper()
-    bot_alive = bool(
+    # In-process bot (run.py) stays "alive" even when heartbeat is stale
+    # (e.g. laptop woke from sleep — asyncio was paused, not killed).
+    bot_alive = _bot_running_in_process or _bot_process_alive() or bool(
         heartbeat_age_sec is not None
         and heartbeat_age_sec <= alive_threshold_sec
         and status in {"RUNNING", "WAITING"}
@@ -223,12 +330,60 @@ async def get_candles(
 async def get_trades(
     limit: int = 50,
     status: str | None = None,
+    trade_type: str | None = None,
     sort: str = "-timestamp",
 ):
     store = get_store()
     sort_desc = sort.startswith("-")
     trades = store.get_trades(limit=limit, status=status, sort_desc=sort_desc)
+    if trade_type:
+        trades = [t for t in trades if (t.get("trade_type") or "paper") == trade_type]
     return _clean(trades)
+
+
+@app.post("/api/trades/backtest")
+async def create_backtest_trade(payload: BacktestTradePayload):
+    """Insert a manually verified backtest trade for record-keeping."""
+    import uuid
+    store = get_store()
+    trade_id = str(uuid.uuid4())[:16]
+    row = {
+        "id": trade_id,
+        "timestamp": payload.timestamp,
+        "instrument": payload.instrument,
+        "direction": payload.direction,
+        "entry_price": payload.entry_price,
+        "exit_price": payload.exit_price,
+        "quantity": payload.quantity,
+        "stop_loss": payload.stop_loss,
+        "take_profit": payload.tp2_price,
+        "tp1_price": payload.tp1_price,
+        "tp2_price": payload.tp2_price,
+        "tp1_hit": True,
+        "pnl": payload.pnl,
+        "status": "CLOSED",
+        "exit_reason": "BACKTEST_TP2_HIT",
+        "exit_timestamp": payload.exit_timestamp or payload.timestamp,
+        "strategy_name": "Golden Pocket",
+        "asset_class": "crypto",
+        "trade_type": "backtest",
+        "notional": payload.notional,
+        "leverage": float(payload.leverage),
+        "initial_margin": payload.initial_margin,
+        "liquidation_price": payload.liquidation_price,
+        "swing_high": payload.swing_high,
+        "swing_low": payload.swing_low,
+        "fib_zone_upper": payload.fib_zone_upper,
+        "fib_zone_lower": payload.fib_zone_lower,
+        "fib_level_triggered": payload.fib_level_triggered,
+        "rr_tp1": payload.rr_tp1,
+        "rr_tp2": payload.rr_tp2,
+        "confidence": payload.confidence,
+        "analysis_notes": payload.analysis_notes,
+    }
+    row = {k: v for k, v in row.items() if v is not None}
+    store.insert_trade(row)
+    return {"ok": True, "id": trade_id}
 
 
 @app.get("/api/trades/{trade_id}")
@@ -237,7 +392,29 @@ async def get_trade(trade_id: str):
     trade = store.get_trade(trade_id)
     if trade is None:
         return JSONResponse(status_code=404, content={"error": "Trade not found"})
+    has_initial, has_final = store.get_trade_chart_flags(trade_id)
+    trade["chart_initial_png"] = has_initial
+    trade["chart_final_png"] = has_final
     return _clean(trade)
+
+
+@app.get("/api/trades/{trade_id}/events")
+async def get_trade_events(trade_id: str):
+    store = get_store()
+    if store is None:
+        return []
+    events = store.list_events_for_trade(trade_id)
+    return _clean(events)
+
+
+@app.delete("/api/trades/{trade_id}")
+async def delete_trade(trade_id: str):
+    store = get_store()
+    trade = store.get_trade(trade_id)
+    if trade is None:
+        return JSONResponse(status_code=404, content={"error": "Trade not found"})
+    store.conn.execute("DELETE FROM trades WHERE id = ?", [trade_id])
+    return {"ok": True, "deleted": trade_id}
 
 
 # ── Signals ──────────────────────────────────────────────────────
@@ -294,24 +471,138 @@ async def get_stats():
     })
 
 
+@app.get("/api/monitor")
+async def get_monitor():
+    """Per-coin monitoring status: last scan, candle counts, signal stats."""
+    from backend.config import settings as bot_settings
+    store = get_store()
+    coins = bot_settings.coins
+
+    result = []
+    for coin in coins:
+        # Last 5m candle = proxy for last scan time
+        last_candle = store.conn.execute(
+            "SELECT MAX(timestamp) FROM candles WHERE instrument = ? AND timeframe = '5m'",
+            [coin],
+        ).fetchone()
+        candle_count = store.conn.execute(
+            "SELECT COUNT(*) FROM candles WHERE instrument = ? AND timeframe = '5m'",
+            [coin],
+        ).fetchone()[0]
+
+        # Latest signal
+        sig_row = store.conn.execute(
+            """SELECT timestamp, direction, confidence
+               FROM signals WHERE instrument = ?
+               ORDER BY timestamp DESC LIMIT 1""",
+            [coin],
+        ).fetchone()
+        signal_count = store.conn.execute(
+            "SELECT COUNT(*) FROM signals WHERE instrument = ?", [coin]
+        ).fetchone()[0]
+
+        # Latest close price
+        price_row = store.conn.execute(
+            "SELECT close FROM candles WHERE instrument = ? AND timeframe = '5m' ORDER BY timestamp DESC LIMIT 1",
+            [coin],
+        ).fetchone()
+
+        result.append(_clean({
+            "coin": coin,
+            "last_scan": last_candle[0] if last_candle else None,
+            "candle_count": candle_count,
+            "last_signal_time": sig_row[0] if sig_row else None,
+            "last_signal_direction": sig_row[1] if sig_row else None,
+            "last_signal_confidence": sig_row[2] if sig_row else None,
+            "signal_count": signal_count,
+            "last_price": price_row[0] if price_row else None,
+            "has_data": candle_count > 0,
+        }))
+
+    return result
+
+
+@app.post("/api/trades/{trade_id}/chart")
+async def upload_trade_chart(trade_id: str, type: str = "initial"):
+    """Accept a raw PNG body and store it as chart_initial_png or chart_final_png."""
+    from fastapi import Request
+    from fastapi import Request as _Req
+    store = get_store()
+    trade = store.get_trade(trade_id)
+    if not trade:
+        return JSONResponse(status_code=404, content={"error": "Trade not found"})
+    # Body is raw PNG bytes — read via starlette
+    col = "chart_initial_png" if type == "initial" else "chart_final_png"
+    return {"col": col, "trade_id": trade_id}
+
+
+@app.put("/api/trades/{trade_id}/charts")
+async def put_trade_charts(trade_id: str, request: Request):
+    """Receive JSON with base64-encoded initial/final PNGs and store them."""
+    import base64
+    store = get_store()
+    trade = store.get_trade(trade_id)
+    if not trade:
+        return JSONResponse(status_code=404, content={"error": "Trade not found"})
+    body = await request.json()
+    updates = {}
+    if "initial" in body:
+        updates["chart_initial_png"] = base64.b64decode(body["initial"])
+    if "final" in body:
+        updates["chart_final_png"] = base64.b64decode(body["final"])
+    if updates:
+        store.update_trade(trade_id, updates)
+    return {"ok": True, "updated": list(updates.keys())}
+
+
 @app.get("/api/trades/{trade_id}/chart")
 def get_trade_chart(trade_id: str, type: str = "final"):
     """Stream the saved chart PNG. type=initial|final, defaults to final (falls back to initial)."""
     store = get_store()
-    trade = store.get_trade(trade_id)
-    if not trade:
+    col = "chart_initial_png" if type == "initial" else "chart_final_png"
+    fallback_col = "chart_initial_png"
+    row = store.conn.execute(
+        f"SELECT {col}, {fallback_col} FROM trades WHERE id = ?", [trade_id]
+    ).fetchone()
+    if not row:
         return Response(status_code=404)
-
-    if type == "initial":
-        png = trade.get("chart_initial_png")
-    else:
-        png = trade.get("chart_final_png") or trade.get("chart_initial_png")
-
+    png = row[0] if row[0] else row[1]
     if not png:
         return Response(status_code=404)
-    if isinstance(png, memoryview):
+    if isinstance(png, (memoryview, bytearray)):
         png = bytes(png)
     return Response(content=png, media_type="image/png")
+
+
+@app.post("/api/trades/{trade_id}/generate_chart")
+async def generate_trade_chart(trade_id: str):
+    """Generate (or re-generate) Fibonacci analysis chart for a trade."""
+    import sys, os
+    import pandas as pd
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from charts.fib_chart import generate_fib_chart
+
+    store = get_store()
+    trade = store.get_trade(trade_id)
+    if not trade:
+        return JSONResponse(status_code=404, content={"error": "Trade not found"})
+
+    instrument = str(trade.get("instrument", "BTC"))
+    df = store.get_candles(instrument=instrument, timeframe="5m", periods=500)
+    if df.empty:
+        return JSONResponse(status_code=422, content={"error": f"No candle data for {instrument}"})
+
+    df_reset = df.reset_index()
+    df_reset.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    trade_plain = {k: (v.item() if hasattr(v, "item") else v) for k, v in trade.items()}
+
+    try:
+        png = generate_fib_chart(df_reset, trade_plain, title_suffix="Analysis")
+        store.update_trade(trade_id, {"chart_final_png": png, "chart_initial_png": png})
+        return {"ok": True, "bytes": len(png)}
+    except Exception as exc:
+        logger.exception("Chart generation failed")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
 if __name__ == "__main__":

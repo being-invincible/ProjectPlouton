@@ -1,6 +1,7 @@
 """OrderManager — wires Signal → PaperBroker, persists chart blobs and bot state."""
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -79,6 +80,23 @@ class OrderManager:
                         "tp1_hit": True,
                         "stop_loss": trade["entry_price"],
                         "initial_margin": original_margin * 0.5,
+                    })
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    self.store.insert_trade_event({
+                        "id": str(uuid.uuid4()),
+                        "trade_id": trade_id,
+                        "event_type": "TP1_PARTIAL",
+                        "price": exit_price,
+                        "pnl_partial": pnl,
+                        "timestamp": now_iso,
+                    })
+                    self.store.insert_trade_event({
+                        "id": str(uuid.uuid4()),
+                        "trade_id": trade_id,
+                        "event_type": "SL_MOVED",
+                        "price": float(trade["entry_price"]),
+                        "pnl_partial": None,
+                        "timestamp": now_iso,
                     })
                     continue
 

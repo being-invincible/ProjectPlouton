@@ -48,6 +48,13 @@ const api = {
     return res.json();
   },
 
+  /** Fetch lifecycle events for a trade */
+  async getTradeEvents(tradeId) {
+    const res = await fetch(`${API_BASE}/trades/${tradeId}/events`);
+    if (!res.ok) return [];
+    return res.json();
+  },
+
   /** Fetch candles for a given timeframe */
   async getCandles(instrument = 'BTC', timeframe = '5m', limit = 500) {
     const params = new URLSearchParams({ instrument, timeframe, limit });
@@ -85,9 +92,27 @@ const api = {
     return res.json();
   },
 
+  /** Per-coin monitoring status */
+  async getMonitor() {
+    const res = await fetch(`${API_BASE}/monitor`);
+    return res.json();
+  },
+
   /** Health check */
   async health() {
     const res = await fetch(`${API_BASE}/health`);
+    return res.json();
+  },
+
+  /** Start the bot subprocess */
+  async startBot() {
+    const res = await fetch(`${API_BASE}/bot/start`, { method: 'POST' });
+    return res.json();
+  },
+
+  /** Stop the bot subprocess */
+  async stopBot() {
+    const res = await fetch(`${API_BASE}/bot/stop`, { method: 'POST' });
     return res.json();
   },
 

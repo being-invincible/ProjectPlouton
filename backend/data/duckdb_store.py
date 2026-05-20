@@ -152,6 +152,17 @@ class DuckDBStore:
             )
             """)
 
+            self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_events (
+                id          VARCHAR PRIMARY KEY,
+                trade_id    VARCHAR NOT NULL,
+                event_type  VARCHAR NOT NULL,
+                price       DOUBLE,
+                pnl_partial DOUBLE,
+                timestamp   TIMESTAMP NOT NULL
+            )
+            """)
+
         # Seed bot_state if empty
         count = self.conn.execute(
             "SELECT COUNT(*) FROM bot_state"
@@ -170,9 +181,9 @@ class DuckDBStore:
             self.conn.execute("""
                 INSERT INTO strategy_configs
                     (id, strategy_name, display_name, is_active, description, params)
-                VALUES (1, 'fibonacci_retracement', 'Fibonacci Retracement', TRUE,
-                    'Enters trades when price retraces to key Fibonacci levels (38.2%, 61.8%) within a VWAP-confirmed trend.',
-                    '{"lookback_period": 20, "entry_levels": [0.382, 0.618], "stop_loss_level": 0.786, "risk_reward_ratio": 2.0, "timeframe": "5m", "risk_per_trade_pct": 1.0, "max_open_positions": 3, "max_daily_loss_pct": 5.0}'
+                VALUES (1, 'golden_pocket', 'Golden Pocket', TRUE,
+                    'Enters trades at the Golden Pocket retracement zone (0.618–0.65) of the most recent swing, confirmed by multi-timeframe trend alignment and ATR-based stop loss.',
+                    '{"entry_zone_low": 0.618, "entry_zone_high": 0.65, "atr_sl_multiplier": 1.5, "atr_period": 14, "min_slope_pct": 0.002, "execution_tf": "5m", "confirmation_tf": "15m", "trend_tf": "1h", "risk_per_trade_pct": 3.0, "max_open_positions": 3, "max_daily_loss_pct": 15.0}'
                 )
             """)
 
@@ -203,6 +214,24 @@ class DuckDBStore:
             self.conn.execute("ALTER TABLE trades ADD COLUMN liquidation_price DOUBLE")
         if "funding_rate_hr" not in existing:
             self.conn.execute("ALTER TABLE trades ADD COLUMN funding_rate_hr DOUBLE")
+        if "trade_type" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN trade_type VARCHAR DEFAULT 'paper'")
+        if "fib_zone_upper" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN fib_zone_upper DOUBLE")
+        if "fib_zone_lower" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN fib_zone_lower DOUBLE")
+        if "swing_high" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN swing_high DOUBLE")
+        if "swing_low" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN swing_low DOUBLE")
+        if "fib_level_triggered" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN fib_level_triggered DOUBLE")
+        if "rr_tp1" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN rr_tp1 DOUBLE")
+        if "rr_tp2" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN rr_tp2 DOUBLE")
+        if "analysis_notes" not in existing:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN analysis_notes VARCHAR")
 
         self.conn.execute(
             "UPDATE candles SET asset_class = 'crypto' WHERE asset_class IS NULL OR asset_class = 'futures'"
@@ -730,11 +759,18 @@ class DuckDBStore:
         ).fetchone()
         return row[0] if row else 0
 
+    # Blob columns excluded from list views (too large for JSON, fetched separately)
+    _BLOB_COLS = {"chart_initial_png", "chart_final_png"}
+
     def get_trades(
         self, limit: int = 50, status: str | None = None, sort_desc: bool = True,
     ) -> list[dict]:
-        """Get trades with optional filtering."""
-        query = "SELECT * FROM trades"
+        """Get trades without binary blob columns (charts fetched via /chart endpoint)."""
+        # Discover non-blob columns dynamically so new columns are included automatically
+        all_cols = [row[1] for row in self.conn.execute("PRAGMA table_info(trades)").fetchall()]
+        cols = [c for c in all_cols if c not in self._BLOB_COLS]
+        col_sql = ", ".join(cols)
+        query = f"SELECT {col_sql} FROM trades"
         params = []
         if status:
             query += " WHERE status = ?"
@@ -747,13 +783,55 @@ class DuckDBStore:
         return df.to_dict("records")
 
     def get_trade(self, trade_id: str) -> dict | None:
-        """Get a single trade by ID."""
+        """Get a single trade by ID, excluding raw blob bytes."""
+        all_cols = [row[1] for row in self.conn.execute("PRAGMA table_info(trades)").fetchall()]
+        cols = [c for c in all_cols if c not in self._BLOB_COLS]
+        col_sql = ", ".join(cols)
         df = self.conn.execute(
-            "SELECT * FROM trades WHERE id = ?", [trade_id]
+            f"SELECT {col_sql} FROM trades WHERE id = ?", [trade_id]
         ).fetchdf()
         if df.empty:
             return None
         return df.iloc[0].to_dict()
+
+    def get_trade_chart_flags(self, trade_id: str) -> tuple[bool, bool]:
+        """Return (has_initial, has_final) booleans for chart blob presence."""
+        row = self.conn.execute(
+            "SELECT chart_initial_png IS NOT NULL, chart_final_png IS NOT NULL FROM trades WHERE id = ?",
+            [trade_id],
+        ).fetchone()
+        if not row:
+            return False, False
+        return bool(row[0]), bool(row[1])
+
+    # ── Trade Events ────────────────────────────────────────────
+
+    def insert_trade_event(self, event: dict) -> None:
+        """Insert a lifecycle event for a trade."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO trade_events (id, trade_id, event_type, price, pnl_partial, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    event["id"],
+                    event["trade_id"],
+                    event["event_type"],
+                    event.get("price"),
+                    event.get("pnl_partial"),
+                    event["timestamp"],
+                ],
+            )
+
+    def list_events_for_trade(self, trade_id: str) -> list[dict]:
+        """Return lifecycle events for a trade, ordered by timestamp."""
+        with self._lock:
+            df = self.conn.execute(
+                "SELECT * FROM trade_events WHERE trade_id = ? ORDER BY timestamp ASC",
+                [trade_id],
+            ).fetchdf()
+        if df.empty:
+            return []
+        return df.to_dict("records")
 
     # ── Signal CRUD ─────────────────────────────────────────────
 
