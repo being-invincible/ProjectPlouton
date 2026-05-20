@@ -795,8 +795,9 @@ class DuckDBStore:
         return df.iloc[0].to_dict()
 
     def delete_trade(self, trade_id: str) -> None:
-        """Hard-delete a trade record."""
+        """Hard-delete a trade record and its associated lifecycle events."""
         with self._lock:
+            self.conn.execute("DELETE FROM trade_events WHERE trade_id = ?", [trade_id])
             self.conn.execute("DELETE FROM trades WHERE id = ?", [trade_id])
 
     def get_trade_chart_flags(self, trade_id: str) -> tuple[bool, bool]:

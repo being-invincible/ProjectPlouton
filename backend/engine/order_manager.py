@@ -76,10 +76,11 @@ class OrderManager:
 
                 if reason == "TP1_PARTIAL":
                     original_margin = float(trade.get("initial_margin") or 0)
+                    margin_update = {"initial_margin": original_margin * 0.5} if original_margin > 0 else {}
                     self.store.update_trade(trade_id, {
                         "tp1_hit": True,
                         "stop_loss": trade["entry_price"],
-                        "initial_margin": original_margin * 0.5,
+                        **margin_update,
                     })
                     now_iso = datetime.now(timezone.utc).isoformat()
                     self.store.insert_trade_event({
