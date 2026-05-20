@@ -691,6 +691,107 @@ async def get_fib_analysis(coin: str):
     })
 
 
+# ── Backtest / Manual Trade Entry ────────────────────────────────
+
+class BacktestTradeIn(BaseModel):
+    instrument: str
+    direction: str           # "LONG" or "SHORT"
+    entry_price: float
+    stop_loss: float
+    take_profit: float       # legacy TP / TP2
+    quantity: float
+    timestamp: str           # ISO-8601 entry time
+    status: str = "CLOSED"
+    strategy_name: str = "golden_pocket"
+    asset_class: str = "crypto"
+    trade_type: str = "backtest"
+    # Optional enrichment
+    tp1_price: float | None = None
+    tp2_price: float | None = None
+    tp1_hit: bool | None = None
+    exit_price: float | None = None
+    exit_timestamp: str | None = None
+    exit_reason: str | None = None
+    pnl: float | None = None
+    confidence: float | None = None
+    leverage: float | None = None
+    notional: float | None = None
+    initial_margin: float | None = None
+    swing_high: float | None = None
+    swing_low: float | None = None
+    fib_zone_upper: float | None = None
+    fib_zone_lower: float | None = None
+    fib_level_triggered: float | None = None
+    rr_tp1: float | None = None
+    rr_tp2: float | None = None
+    analysis_notes: str | None = None
+
+
+@app.post("/api/trades")
+async def create_backtest_trade(body: BacktestTradeIn):
+    """
+    Insert a backtest or manual trade record.
+    Generates a UUID, stores all provided fields, and optionally
+    writes trade_events for entry / TP1 / TP2 exits.
+    """
+    import uuid
+    store = get_store()
+
+    trade_id = str(uuid.uuid4())[:16]
+    row = {
+        "id": trade_id,
+        **{k: v for k, v in body.model_dump().items() if v is not None},
+    }
+    store.insert_trade(row)
+
+    # Persist lifecycle events so TradeDetail timeline renders properly
+    events = []
+    events.append({
+        "id": str(uuid.uuid4())[:16],
+        "trade_id": trade_id,
+        "event_type": "entry",
+        "price": body.entry_price,
+        "pnl_partial": None,
+        "timestamp": body.timestamp,
+    })
+
+    if body.tp1_price and body.tp1_hit:
+        sl_dist = abs(body.entry_price - body.stop_loss)
+        qty_half = body.quantity / 2
+        tp1_pnl = qty_half * abs(body.tp1_price - body.entry_price)
+        events.append({
+            "id": str(uuid.uuid4())[:16],
+            "trade_id": trade_id,
+            "event_type": "TP1_hit",
+            "price": body.tp1_price,
+            "pnl_partial": round(tp1_pnl, 4),
+            "timestamp": body.exit_timestamp or body.timestamp,
+        })
+
+    if body.exit_price and body.exit_reason:
+        events.append({
+            "id": str(uuid.uuid4())[:16],
+            "trade_id": trade_id,
+            "event_type": body.exit_reason,
+            "price": body.exit_price,
+            "pnl_partial": body.pnl,
+            "timestamp": body.exit_timestamp or body.timestamp,
+        })
+
+    for ev in events:
+        try:
+            cols = list(ev.keys())
+            vals = [ev[c] for c in cols]
+            store.conn.execute(
+                f"INSERT INTO trade_events ({', '.join(cols)}) VALUES ({', '.join(['?']*len(cols))})",
+                vals,
+            )
+        except Exception as e:
+            logger.warning(f"Could not insert trade_event: {e}")
+
+    return {"id": trade_id, "status": "created", "events_inserted": len(events)}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8090, log_level="info")
