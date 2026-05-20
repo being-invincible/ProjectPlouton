@@ -229,12 +229,26 @@ class OrderManager:
         total_pnl = sum(float(t.get("pnl") or 0) for t in closed)
         wins = sum(1 for t in closed if float(t.get("pnl") or 0) > 0)
 
+        # Balance = initial + all closed PnL - margin locked in open trades
+        open_margin = sum(
+            float(t.get("initial_margin") or 0)
+            for t in trades if t.get("status") == "OPEN"
+        )
+        balance = self.broker.initial_balance + total_pnl - open_margin
+
+        # Daily PnL = trades entered today (UTC)
+        today = datetime.now(timezone.utc).date().isoformat()
+        daily_pnl = sum(
+            float(t.get("pnl") or 0) for t in closed
+            if str(t.get("timestamp", ""))[:10] == today
+        )
+
         self.store.update_bot_state({
-            "balance": self.broker.balance,
+            "balance": balance,
             "initial_balance": self.broker.initial_balance,
             "total_trades": len(closed),
             "winning_trades": wins,
-            "daily_pnl": total_pnl,
+            "daily_pnl": daily_pnl,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         })
 
