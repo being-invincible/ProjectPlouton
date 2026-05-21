@@ -36,18 +36,27 @@ class ConfidenceScorer:
         tf_1h = mtf.get("1h", {}).get("trend")
         tf_4h = mtf.get("4h", {}).get("trend")
 
-        # 1d is the macro trend — must align (or be unknown for new coins).
-        if tf_1d not in (wanted, "UNKNOWN", None):
-            return 0.0
-        # 1h must align with macro trend.
+        # 1h drives direction — must align.
         if tf_1h != wanted:
             return 0.0
-        # Classic 4h golden pocket: 1d+1h trending, 4h retracing into zone.
+
+        # Start from base score based on 4h posture.
+        # Ideal: 1h trending, 4h retracing INTO fib zone (pullback entry).
         if tf_4h == opposite:
-            return 1.0   # ideal: price pulling back on 4h toward fib zone
-        if tf_4h == wanted:
-            return 0.75  # momentum alignment — less ideal retracement entry
-        return 0.6       # 4h trend unknown / neutral
+            base = 1.0    # textbook retracement setup
+        elif tf_4h == wanted:
+            base = 0.75   # momentum continuation — less ideal
+        else:
+            base = 0.6    # 4h unknown / neutral
+
+        # 1d alignment is a confidence MULTIPLIER, not a blocker.
+        # Aligned = with the macro trend (best case).
+        # Opposite = counter-trend trade (valid but lower score).
+        if tf_1d == wanted:
+            return base           # macro agrees — full score
+        elif tf_1d == opposite:
+            return base * 0.75   # counter-trend short/long — reduce confidence
+        return base * 0.9        # 1d unknown (new data) — slight discount
 
     def _slope_strength(self, mtf: dict) -> float:
         slope = abs(mtf.get("1h", {}).get("slope", 0.0))

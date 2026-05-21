@@ -160,18 +160,18 @@ class GoldenPocketStrategy:
         if len(df) < 50:
             return None
 
-        # 1d sets the macro trend; fall back to 1h if 1d not yet populated
-        trend_1d = mtf_trend.get("1d", {}).get("trend")
+        # 1h determines trade direction — it responds to corrections fast enough
+        # to generate both LONG and SHORT signals. 1d is too slow; in a bull market
+        # it stays UP permanently and blocks every SHORT signal.
         trend_1h = mtf_trend.get("1h", {}).get("trend")
-        primary_trend = trend_1d if trend_1d in ("UP", "DOWN") else trend_1h
         slope_1h = abs(mtf_trend.get("1h", {}).get("slope", 0))
 
-        if primary_trend not in ("UP", "DOWN"):
+        if trend_1h not in ("UP", "DOWN"):
             return None
         if slope_1h < settings.min_slope_pct:
             return None
 
-        direction: Literal["LONG", "SHORT"] = "LONG" if primary_trend == "UP" else "SHORT"
+        direction: Literal["LONG", "SHORT"] = "LONG" if trend_1h == "UP" else "SHORT"
 
         swing = self.detect_swing(df)
         if swing is None:
