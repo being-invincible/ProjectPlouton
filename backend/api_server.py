@@ -17,6 +17,7 @@ from fastapi import FastAPI, Query, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -842,6 +843,33 @@ async def create_backtest_trade(body: BacktestTradeIn):
             logger.warning(f"Could not insert trade_event: {e}")
 
     return {"id": trade_id, "status": "created", "events_inserted": len(events)}
+
+
+# ── Frontend SPA (serve built React app) ─────────────────────────
+
+_FRONTEND_DIST = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "frontend", "dist",
+)
+
+if os.path.isdir(_FRONTEND_DIST):
+    # Serve static assets (JS/CSS/images) at /assets, /favicon.svg, etc.
+    app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="assets")
+
+    @app.get("/favicon.svg")
+    async def favicon():
+        return Response(
+            content=open(os.path.join(_FRONTEND_DIST, "favicon.svg"), "rb").read(),
+            media_type="image/svg+xml",
+        )
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        """Serve index.html for all non-API routes so React Router works."""
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"error": "Not found"})
+        index = os.path.join(_FRONTEND_DIST, "index.html")
+        return Response(content=open(index, "rb").read(), media_type="text/html")
 
 
 if __name__ == "__main__":
