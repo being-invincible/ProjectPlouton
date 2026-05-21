@@ -115,19 +115,17 @@ class GoldenPocketStrategy:
         if len(df) < 50:
             return None
 
-        trend_1h = mtf_trend.get("1h", {}).get("trend")
-        trend_15m = mtf_trend.get("15m", {}).get("trend")
-        slope_1h = abs(mtf_trend.get("1h", {}).get("slope", 0))
-
-        if trend_1h not in ("UP", "DOWN"):
+        # SMA20 > SMA50 → bullish (golden cross) → LONG
+        # SMA20 < SMA50 → bearish (death cross) → SHORT
+        closes = df["Close"]
+        if len(closes) < 50:
             return None
-        # Do NOT require 15m to match 1h — golden pocket is a retracement entry.
-        # By definition, when price pulls back to the 50-61.8% zone, 15m VMA slopes
-        # against the primary trend. Requiring agreement here eliminates all entries.
-        if slope_1h < settings.min_slope_pct:
-            return None
+        sma20 = float(closes.iloc[-20:].mean())
+        sma50 = float(closes.iloc[-50:].mean())
 
-        direction: Literal["LONG", "SHORT"] = "LONG" if trend_1h == "UP" else "SHORT"
+        if sma20 == sma50:
+            return None
+        direction: Literal["LONG", "SHORT"] = "LONG" if sma20 > sma50 else "SHORT"
 
         swing = self.detect_swing(df)
         if swing is None:
