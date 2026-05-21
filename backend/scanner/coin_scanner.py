@@ -79,21 +79,37 @@ class CoinScanner:
         confidence = self.confidence_scorer.score(signal=signal, df=exec_df, mtf_trend=mtf_trend)
 
         # 7. Position sizing (must happen before quality check to know margin)
-        open_trades = self.duckdb_store.count_open_trades()
+        open_trade_list = self.duckdb_store.list_open_trades()
+        open_trades = len(open_trade_list)
         bot_state = self.duckdb_store.get_bot_state() or {}
         balance = float(bot_state.get("balance", settings.paper_balance))
         daily_pnl = float(bot_state.get("daily_pnl", 0.0))
+
+        # One position per coin at a time — prevents re-entering the same setup
+        # across consecutive scan cycles when the position is still open.
+        if any(t.get("instrument") == self.coin for t in open_trade_list):
+            logger.debug(f"[{self.coin}] position already open, skipping")
+            return None
+
+        # Live strategy params from DB so the Settings UI takes effect immediately.
+        strategy_params = self.duckdb_store.get_active_strategy_params()
+        live_min_conf  = float(strategy_params.get("min_confidence_pct",  settings.min_confidence_pct))
+        live_max_open  = int(strategy_params.get("max_open_trades",        settings.max_open_trades))
+        live_risk_pct  = float(strategy_params.get("risk_per_trade_pct",   settings.risk_per_trade_pct * 100)) / 100
+
         max_lev = self.fetcher.get_max_leverage(self.coin)
         funding = self.fetcher.fetch_funding_rate(self.coin)
         position = self.position_sizer.size(
             balance=balance, entry=signal.entry_price, stop_loss=signal.stop_loss,
             direction=signal.direction, max_leverage_for_coin=max_lev, funding_rate_hr=funding,
+            risk_per_trade_pct=live_risk_pct,
         )
 
-        # 8. Quality gate (now includes margin check)
+        # 8. Quality gate with live-tunable thresholds
         if not self.quality_filter.accept(
             open_trades_count=open_trades, daily_pnl=daily_pnl, balance=balance,
             confidence=confidence, position_margin=position.initial_margin,
+            min_confidence_override=live_min_conf, max_open_trades_override=live_max_open,
         ):
             logger.info(
                 f"[{self.coin}] signal rejected by quality filter "

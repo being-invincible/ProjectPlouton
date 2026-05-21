@@ -34,12 +34,14 @@ class PositionSizer:
         direction: str,
         max_leverage_for_coin: int,
         funding_rate_hr: float = 0.0,
+        risk_per_trade_pct: float | None = None,
     ) -> PositionInfo:
         stop_distance = abs(entry - stop_loss)
         if stop_distance <= 0:
             raise ValueError("Stop distance cannot be zero")
 
-        risk_amount = balance * self.risk_per_trade_pct
+        effective_risk_pct = risk_per_trade_pct if risk_per_trade_pct is not None else self.risk_per_trade_pct
+        risk_amount = balance * effective_risk_pct
         quantity = risk_amount / stop_distance
         notional = quantity * entry
 

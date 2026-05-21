@@ -928,6 +928,29 @@ class DuckDBStore:
             row["params"] = json.loads(row["params"])
         return row
 
+    def get_active_strategy_params(self) -> dict:
+        """Return the params dict of the active strategy config (live-tunable settings)."""
+        import json
+        row = self.conn.execute(
+            "SELECT params FROM strategy_configs WHERE is_active = TRUE ORDER BY id LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            return json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+        except Exception:
+            return {}
+
+    def update_active_strategy_params(self, updates: dict) -> None:
+        """Merge updates into the active strategy params JSON."""
+        import json
+        current = self.get_active_strategy_params()
+        current.update(updates)
+        self.conn.execute(
+            "UPDATE strategy_configs SET params = ? WHERE is_active = TRUE",
+            [json.dumps(current)],
+        )
+
     def get_strategy_configs(self) -> list[dict]:
         """Get all strategy configs."""
         df = self.conn.execute(

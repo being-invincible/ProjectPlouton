@@ -152,6 +152,11 @@ class SettingsPatch(BaseModel):
     balance: float | None = None
     trading_mode: str | None = None
     force_market_open: bool | None = None
+    # Strategy params — saved to strategy_configs.params, read live by scanner
+    min_confidence_pct: float | None = None
+    risk_per_trade_pct: float | None = None
+    max_open_trades: int | None = None
+    min_slope_pct: float | None = None
 
 
 class BacktestTradePayload(BaseModel):
@@ -274,41 +279,64 @@ async def get_runtime():
 
 @app.get("/api/settings")
 async def get_settings_state():
+    from config import settings as bot_settings
     store = get_store()
     state = store.get_bot_state() or {}
+    strategy_params = store.get_active_strategy_params()
     return _clean({
         "instrument": state.get("instrument", "BTC"),
         "balance": state.get("balance", 500.0),
         "trading_mode": state.get("trading_mode", "paper"),
         "force_market_open": state.get("force_market_open", False),
+        # Strategy params — live-tunable without restart
+        "min_confidence_pct": float(strategy_params.get("min_confidence_pct", bot_settings.min_confidence_pct)),
+        "risk_per_trade_pct": float(strategy_params.get("risk_per_trade_pct", bot_settings.risk_per_trade_pct * 100)),
+        "max_open_trades": int(strategy_params.get("max_open_trades", bot_settings.max_open_trades)),
+        "min_slope_pct": float(strategy_params.get("min_slope_pct", 0.5)),
     })
 
 
 @app.patch("/api/settings")
 async def patch_settings(payload: SettingsPatch):
+    from config import settings as bot_settings
     store = get_store()
-    updates = {}
+    bot_updates = {}
+    strategy_updates = {}
 
     if payload.instrument is not None:
-        updates["instrument"] = payload.instrument
+        bot_updates["instrument"] = payload.instrument
 
     if payload.balance is not None:
-        updates["balance"] = float(payload.balance)
+        bot_updates["balance"] = float(payload.balance)
 
     if payload.trading_mode is not None:
         mode = payload.trading_mode.lower().strip()
         if mode not in {"paper", "live"}:
             return JSONResponse(status_code=400, content={"error": "trading_mode must be 'paper' or 'live'"})
-        updates["trading_mode"] = mode
+        bot_updates["trading_mode"] = mode
 
     if payload.force_market_open is not None:
-        updates["force_market_open"] = bool(payload.force_market_open)
+        bot_updates["force_market_open"] = bool(payload.force_market_open)
 
-    if not updates:
+    # Strategy params — written to strategy_configs.params, read live by scanner
+    if payload.min_confidence_pct is not None:
+        strategy_updates["min_confidence_pct"] = float(payload.min_confidence_pct)
+    if payload.risk_per_trade_pct is not None:
+        strategy_updates["risk_per_trade_pct"] = float(payload.risk_per_trade_pct)
+    if payload.max_open_trades is not None:
+        strategy_updates["max_open_trades"] = int(payload.max_open_trades)
+    if payload.min_slope_pct is not None:
+        strategy_updates["min_slope_pct"] = float(payload.min_slope_pct)
+
+    if not bot_updates and not strategy_updates:
         return {"ok": True, "updated": 0}
 
-    store.update_bot_state(updates)
-    return {"ok": True, "updated": len(updates)}
+    if bot_updates:
+        store.update_bot_state(bot_updates)
+    if strategy_updates:
+        store.update_active_strategy_params(strategy_updates)
+
+    return {"ok": True, "updated": len(bot_updates) + len(strategy_updates)}
 
 
 # ── Candles ──────────────────────────────────────────────────────
