@@ -109,6 +109,16 @@ export default function FibChart({ trade }) {
             Math.abs(c.time - targetUnix) < Math.abs(best.time - targetUnix) ? c : best,
             chartData[0]).time;
 
+        // Compute simple moving average — returns array of { time, value } skipping warmup nulls
+        const computeSMA = (data, period) =>
+          data.reduce((acc, c, i) => {
+            if (i < period - 1) return acc;
+            const slice = data.slice(i - period + 1, i + 1);
+            const avg = slice.reduce((s, x) => s + x.close, 0) / period;
+            acc.push({ time: c.time, value: avg });
+            return acc;
+          }, []);
+
         const entrySnapped = snap(entryUnix);
 
         // Swing H/L — use saved values or compute from 100 candles before entry
@@ -165,6 +175,30 @@ export default function FibChart({ trade }) {
           value: c.volume,
           color: c.close >= c.open ? 'rgba(38,166,154,0.18)' : 'rgba(239,83,80,0.18)',
         })));
+
+        // ── SMA overlays ─────────────────────────────────────────
+        const sma20data = computeSMA(chartData, 20);
+        const sma50data = computeSMA(chartData, 50);
+
+        const sma20Series = chart.addSeries(LineSeries, {
+          color:                   '#2196f3',
+          lineWidth:               1,
+          crosshairMarkerVisible:  false,
+          lastValueVisible:        false,
+          priceLineVisible:        false,
+          title:                   'SMA20',
+        });
+        sma20Series.setData(sma20data);
+
+        const sma50Series = chart.addSeries(LineSeries, {
+          color:                   'rgba(255,255,255,0.65)',
+          lineWidth:               1,
+          crosshairMarkerVisible:  false,
+          lastValueVisible:        false,
+          priceLineVisible:        false,
+          title:                   'SMA50',
+        });
+        sma50Series.setData(sma50data);
 
         // ── Markers (accumulate, sort, then set once) ─────────────
         const markers = [];
@@ -486,6 +520,8 @@ export default function FibChart({ trade }) {
           {trade.exit_price && (
             <LegendRow color="#f59e0b" label={`Exit(${trade.exit_reason})  ${parseFloat(trade.exit_price).toFixed(4)}`} />
           )}
+          <LegendRow color="#2196f3" label="SMA 20" />
+          <LegendRow color="rgba(255,255,255,0.65)" label="SMA 50" />
         </div>
       )}
 
