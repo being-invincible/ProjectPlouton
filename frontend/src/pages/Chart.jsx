@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { createChart, CandlestickSeries, HistogramSeries } from 'lightweight-charts';
+import { createChart, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
 import {
   TrendingUp, TrendingDown, BarChart3, Activity, RefreshCw, Zap, Clock,
 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
 
 const TIMEFRAMES = [
+  { value: '1m', label: '1min' },
   { value: '5m', label: '5min' },
   { value: '15m', label: '15min' },
   { value: '30m', label: '30min' },
@@ -84,7 +85,7 @@ export default function Chart() {
     try {
       setLoading(true);
       // 30m not stored by bot — fetch 5m and resample client-side
-      const apiTf = timeframe === '30m' ? '5m' : timeframe;
+      const apiTf = timeframe === '30m' ? '5m' : timeframe === '1m' ? '1m' : timeframe;
       const [candleData, trend, monitorAll] = await Promise.all([
         api.getCandles(instrument, apiTf, 5000),
         api.getMtfTrend(instrument),
@@ -152,6 +153,33 @@ export default function Chart() {
       value: c.volume || 0,
       color: c.close >= c.open ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
     })));
+
+    // ── SMA overlays ──────────────────────────────────────────────
+    const chartData = candles.map(c => ({
+      time: Math.floor(new Date(c.timestamp).getTime() / 1000),
+      close: c.close,
+    }));
+    const computeSMA = (data, period) =>
+      data.reduce((acc, c, i) => {
+        if (i < period - 1) return acc;
+        const avg = data.slice(i - period + 1, i + 1).reduce((s, x) => s + x.close, 0) / period;
+        acc.push({ time: c.time, value: avg });
+        return acc;
+      }, []);
+
+    const sma20Series = chart.addSeries(LineSeries, {
+      color: '#2196f3', lineWidth: 1,
+      crosshairMarkerVisible: false, lastValueVisible: true,
+      priceLineVisible: false, title: 'SMA20',
+    });
+    sma20Series.setData(computeSMA(chartData, 20));
+
+    const sma50Series = chart.addSeries(LineSeries, {
+      color: 'rgba(255,255,255,0.6)', lineWidth: 1,
+      crosshairMarkerVisible: false, lastValueVisible: true,
+      priceLineVisible: false, title: 'SMA50',
+    });
+    sma50Series.setData(computeSMA(chartData, 50));
 
     // Show last 120 candles with ~50 empty bars on the right so the current
     // bar sits at ~70% of the chart width, leaving breathing room like TradingView.
