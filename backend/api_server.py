@@ -436,6 +436,30 @@ async def get_trade(trade_id: str):
     return _clean(trade)
 
 
+class TradePatch(BaseModel):
+    pnl: float | None = None
+    status: str | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None
+
+
+@app.patch("/api/trades/{trade_id}")
+async def patch_trade(trade_id: str, payload: TradePatch):
+    """Correct a closed trade's stored fields (e.g. pnl after TP1+TP2 fix)."""
+    store = get_store()
+    trade = store.get_trade(trade_id)
+    if trade is None:
+        return JSONResponse(status_code=404, content={"error": "Trade not found"})
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        return {"ok": True, "updated": 0}
+    try:
+        store.update_trade(trade_id, updates)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True, "updated": list(updates.keys())}
+
+
 @app.get("/api/trades/{trade_id}/events")
 async def get_trade_events(trade_id: str):
     store = get_store()
