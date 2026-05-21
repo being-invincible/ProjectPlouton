@@ -203,16 +203,19 @@ class OrderManager:
             logger.warning(f"chart regen fetch failed for {coin}: {e}")
             return b""
 
+        fib_level = float(trade.get("fib_level_triggered") or 0.5)
         sig = Signal(
             coin=coin, direction=trade["direction"],
             entry_price=float(trade["entry_price"]),
             stop_loss=float(trade["stop_loss"]),
             tp1=float(trade.get("tp1_price") or trade.get("take_profit", 0)),
             tp2=float(trade.get("tp2_price") or trade.get("take_profit", 0)),
-            fib_level_triggered=float(trade.get("fib_level_triggered") or 0.5),
+            fib_level_triggered=fib_level,
+            fib_zone_name="38.2" if fib_level == 0.382 else "GP",
             swing_high=float(trade.get("swing_high") or df["High"].max()),
             swing_low=float(trade.get("swing_low") or df["Low"].min()),
             atr=1.0,
+            rsi=50.0,
             timestamp=pd.Timestamp(str(trade["timestamp"])),
         )
 

@@ -128,13 +128,15 @@ class CoinScanner:
         trade_id = await self.order_manager.execute_with_chart(signal=signal, position=position, confidence=confidence, chart_png=png)
 
         # 11. Discord
+        zone_label = getattr(signal, "fib_zone_name", "GP")
+        rsi_val    = getattr(signal, "rsi", 0)
         mtf_summary = (
             f"1h {'↑' if mtf_trend['1h']['trend']=='UP' else '↓'} {mtf_trend['1h']['trend']} "
             f"(slope {mtf_trend['1h']['slope']*100:.2f}%) · "
             f"15m {'↑' if mtf_trend['15m']['trend']=='UP' else '↓'} {mtf_trend['15m']['trend']} · "
-            f"{exec_tf} in golden pocket"
+            f"{exec_tf} in {zone_label} zone · RSI {rsi_val:.1f}"
         )
-        strategy_summary = f"Swing high ${signal.swing_high:.4f} → low ${signal.swing_low:.4f} · ATR {signal.atr:.4f}"
+        strategy_summary = f"Swing ${signal.swing_high:.4f} → ${signal.swing_low:.4f} · ATR {signal.atr:.4f} · Fib {signal.fib_level_triggered*100:.1f}%"
         await self.discord.send_signal(
             signal=signal, position=position, confidence=confidence, balance=balance,
             mtf_summary=mtf_summary, strategy_summary=strategy_summary, png_bytes=png,

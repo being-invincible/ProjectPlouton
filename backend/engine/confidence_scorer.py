@@ -6,12 +6,13 @@ import pandas as pd
 class ConfidenceScorer:
     """Returns 0-95 confidence score for a Signal given context."""
 
-    W_MTF       = 25
-    W_SLOPE     = 20
-    W_PATTERN   = 20
-    W_VOLUME    = 15
+    W_MTF       = 20
+    W_SLOPE     = 18
+    W_PATTERN   = 18
+    W_VOLUME    = 14
     W_EMA       = 10
     W_ATR_SANE  = 10
+    W_RSI       = 10   # RSI confirmation from QuantInsti best practices
 
     def score(self, signal, df: pd.DataFrame, mtf_trend: dict) -> float:
         """Aggregate weighted heuristics into a single 0-95 score."""
@@ -22,6 +23,10 @@ class ConfidenceScorer:
         score += self._volume_signal(df) * self.W_VOLUME
         score += self._ema_confluence(df, signal) * self.W_EMA
         score += self._atr_sanity(signal) * self.W_ATR_SANE
+        score += self._rsi_score(signal) * self.W_RSI
+        # GP zone scores higher than 38.2% (deeper retracement = stronger support)
+        if getattr(signal, "fib_zone_name", "GP") == "38.2":
+            score *= 0.92
         return max(0.0, min(95.0, score))
 
     def _mtf_alignment(self, mtf: dict, direction: str) -> float:
@@ -110,6 +115,30 @@ class ConfidenceScorer:
         if abs(signal.entry_price - ema50) < threshold or abs(signal.entry_price - ema200) < threshold:
             return 1.0
         return 0.0
+
+    def _rsi_score(self, signal) -> float:
+        """
+        Score RSI confirmation quality.
+        LONG: RSI 30-45 = ideal oversold zone (1.0), 45-55 = acceptable (0.5)
+        SHORT: RSI 55-70 = ideal overbought zone (1.0), 45-55 = acceptable (0.5)
+        """
+        rsi = getattr(signal, "rsi", 50.0)
+        if signal.direction == "LONG":
+            if rsi <= 30:
+                return 0.8   # extremely oversold can mean momentum still down
+            if rsi <= 40:
+                return 1.0
+            if rsi <= 50:
+                return 0.7
+            return 0.3       # 50-55 passed the gate but weak confirmation
+        else:
+            if rsi >= 70:
+                return 0.8
+            if rsi >= 60:
+                return 1.0
+            if rsi >= 50:
+                return 0.7
+            return 0.3
 
     def _atr_sanity(self, signal) -> float:
         rng = signal.swing_high - signal.swing_low
