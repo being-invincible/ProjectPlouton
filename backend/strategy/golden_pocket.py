@@ -97,17 +97,18 @@ class GoldenPocketStrategy:
             fib_0382 = swing_high - 0.382 * rng
             return fib_0382 + 0.5 * atr
 
-    def _take_profits(self, entry: float, stop_loss: float, swing_high: float, swing_low: float, direction: str) -> tuple[float, float]:
-        """TP1 = 1.5 R:R, TP2 = 1.618 Fib extension of the swing."""
-        risk = abs(entry - stop_loss)
+    def _take_profits(self, entry: float, stop_loss: float, swing_high: float, swing_low: float, direction: str) -> tuple[float, None]:
+        """Single TP — 38.2% of the way between 1.272 and 1.414 Fib extensions."""
         rng = swing_high - swing_low
         if direction == "LONG":
-            tp1 = entry + 1.5 * risk
-            tp2 = swing_high + 0.618 * rng
+            fib_1272 = swing_high + 0.272 * rng
+            fib_1414 = swing_high + 0.414 * rng
+            tp1 = fib_1272 + 0.382 * (fib_1414 - fib_1272)
         else:
-            tp1 = entry - 1.5 * risk
-            tp2 = swing_low - 0.618 * rng
-        return tp1, tp2
+            fib_1272 = swing_low - 0.272 * rng
+            fib_1414 = swing_low - 0.414 * rng
+            tp1 = fib_1272 - 0.382 * (fib_1272 - fib_1414)
+        return tp1, None
 
     def analyze(self, df: pd.DataFrame, mtf_trend: Dict, coin: str) -> Optional[Signal]:
         """Return a Signal if a clean golden pocket setup is present, else None."""
@@ -169,7 +170,7 @@ class GoldenPocketStrategy:
             entry_price=entry,
             stop_loss=sl,
             tp1=tp1,
-            tp2=tp2,
+            tp2=None,          # single target design — tp2 always None
             fib_level_triggered=fib_triggered,
             swing_high=swing.high,
             swing_low=swing.low,

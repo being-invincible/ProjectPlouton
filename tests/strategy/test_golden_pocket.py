@@ -87,3 +87,37 @@ def test_sl_short_above_0382():
     expected = fib_0382_short + 0.5 * atr      # = 1643.0
     assert abs(sl - expected) < 0.01, f"SL={sl}, expected={expected}"
     assert sl > fib_0382_short, "SL must be above 0.382 level for SHORT"
+
+
+def test_tp_between_1272_and_1414_long():
+    strat = GoldenPocketStrategy()
+    swing_high, swing_low = 2000.0, 1000.0
+    rng = swing_high - swing_low
+    fib_1272 = swing_high + 0.272 * rng   # = 2272.0
+    fib_1414 = swing_high + 0.414 * rng   # = 2414.0
+    atr = 50.0
+    entry = swing_low + 0.55 * rng        # = 1550.0
+    sl = swing_low + 0.382 * rng - 0.5 * atr
+
+    tp1, tp2 = strat._take_profits(entry, sl, swing_high, swing_low, "LONG")
+
+    expected_tp1 = fib_1272 + 0.382 * (fib_1414 - fib_1272)  # = 2326.276
+    assert abs(tp1 - expected_tp1) < 0.01, f"TP1={tp1}, expected={expected_tp1}"
+    assert tp2 is None, "tp2 must be None — single target design"
+
+
+def test_tp_between_1272_and_1414_short():
+    strat = GoldenPocketStrategy()
+    swing_high, swing_low = 2000.0, 1000.0
+    rng = swing_high - swing_low
+    fib_1272_short = swing_low - 0.272 * rng   # = 728.0
+    fib_1414_short = swing_low - 0.414 * rng   # = 586.0
+    atr = 50.0
+    entry = swing_high - 0.55 * rng             # = 1450.0
+    sl = swing_high - 0.382 * rng + 0.5 * atr
+
+    tp1, tp2 = strat._take_profits(entry, sl, swing_high, swing_low, "SHORT")
+
+    expected_tp1 = fib_1272_short - 0.382 * (fib_1272_short - fib_1414_short)  # = 673.676
+    assert abs(tp1 - expected_tp1) < 0.01, f"TP1={tp1}, expected={expected_tp1}"
+    assert tp2 is None
