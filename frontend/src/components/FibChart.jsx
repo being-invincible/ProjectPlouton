@@ -294,8 +294,8 @@ export default function FibChart({ trade }) {
             const gpZone = chart.addSeries(BaselineSeries, {
               baseValue:        { type: 'price', price: gp50 },
               topLineColor:     'transparent',
-              topFillColor1:    'rgba(255,215,0,0.22)',
-              topFillColor2:    'rgba(255,215,0,0.08)',
+              topFillColor1:    'rgba(255,215,0,0.15)',
+              topFillColor2:    'rgba(255,215,0,0.05)',
               bottomLineColor:  'transparent',
               bottomFillColor1: 'transparent',
               bottomFillColor2: 'transparent',
