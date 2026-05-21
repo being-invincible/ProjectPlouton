@@ -30,22 +30,6 @@ function TradeTypePill({ type }) {
   );
 }
 
-function CapitalCell({ margin, notional, leverage }) {
-  const m = parseFloat(margin || 0);
-  const n = parseFloat(notional || 0);
-  const l = parseFloat(leverage || 1);
-  if (!m) return <span style={{ color: '#475569' }}>—</span>;
-  return (
-    <div style={{ textAlign: 'right' }}>
-      <div style={{ fontFamily: 'JetBrains Mono, monospace', color: '#e2e8f0', fontWeight: 600, fontSize: 13 }}>
-        ${m.toFixed(2)}
-      </div>
-      <div style={{ fontSize: 10, color: '#475569', marginTop: 1 }}>
-        ${Math.round(n).toLocaleString()} · {l.toFixed(0)}×
-      </div>
-    </div>
-  );
-}
 
 export default function Trades() {
   const [trades, setTrades] = useState([]);
@@ -213,9 +197,7 @@ export default function Trades() {
                       { label: 'Instrument', align: 'left' },
                       { label: 'Type', align: 'left' },
                       { label: 'Direction', align: 'left' },
-                      { label: 'Entry', align: 'right' },
-                      { label: 'Capital Used', align: 'right', hint: 'margin / notional @ leverage' },
-                      { label: 'Risk $', align: 'right', hint: '1% of balance at entry' },
+                      { label: 'Entry / Capital', align: 'right', hint: 'Entry price · margin invested · leverage' },
                       { label: 'Exit', align: 'right' },
                       { label: 'P&L', align: 'right' },
                       { label: 'Status', align: 'center' },
@@ -242,12 +224,6 @@ export default function Trades() {
                     const tradeType = trade.trade_type || 'paper';
                     const isBacktest = tradeType === 'backtest';
                     const isOpen = trade.status === 'OPEN';
-
-                    // Risk: quantity × |entry - stop_loss|
-                    const qty = parseFloat(trade.quantity || 0);
-                    const entryP = parseFloat(trade.entry_price || 0);
-                    const slP = parseFloat(trade.stop_loss || 0);
-                    const riskUsd = qty > 0 && slP > 0 ? Math.abs(entryP - slP) * qty : null;
 
                     const rowBg = isBacktest
                       ? 'rgba(251,191,36,0.03)'
@@ -300,25 +276,21 @@ export default function Trades() {
                             </span>
                           </td>
 
-                          {/* Entry */}
-                          <td style={{ padding: '16px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: '#e2e8f0' }}>
-                            {formatCurrency(trade.entry_price)}
-                          </td>
-
-                          {/* Capital Used */}
-                          <td style={{ padding: '16px' }}>
-                            <CapitalCell
-                              margin={trade.initial_margin}
-                              notional={trade.notional}
-                              leverage={trade.leverage}
-                            />
-                          </td>
-
-                          {/* Risk $ */}
-                          <td style={{ padding: '16px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' }}>
-                            {riskUsd != null ? (
-                              <span style={{ color: '#f59e0b' }}>${riskUsd.toFixed(2)}</span>
-                            ) : '—'}
+                          {/* Entry + Capital */}
+                          <td style={{ padding: '16px', textAlign: 'right' }}>
+                            <div style={{ fontFamily: 'JetBrains Mono, monospace', color: '#e2e8f0', fontWeight: 600 }}>
+                              {formatCurrency(trade.entry_price)}
+                            </div>
+                            {parseFloat(trade.initial_margin || 0) > 0 && (
+                              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                                <span style={{ color: '#94a3b8', fontWeight: 500 }}>
+                                  ${parseFloat(trade.initial_margin).toFixed(2)}
+                                </span>
+                                {trade.leverage > 1 && (
+                                  <span style={{ color: '#475569' }}> · {parseFloat(trade.leverage).toFixed(0)}×</span>
+                                )}
+                              </div>
+                            )}
                           </td>
 
                           {/* Exit */}
