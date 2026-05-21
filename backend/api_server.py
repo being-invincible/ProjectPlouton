@@ -93,20 +93,28 @@ def get_store() -> DuckDBStore | None:
 
 def _serialize(obj):
     """Make DuckDB results JSON-serializable."""
+    import math
     import pandas as pd
     from datetime import datetime
     import numpy as np
+    # isna check FIRST — catches pd.NaT, np.nan, None before type-specific branches
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(obj, (datetime, pd.Timestamp)):
         return obj.isoformat()
-    if isinstance(obj, (np.integer,)):
+    if isinstance(obj, np.integer):
         return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, (np.bool_,)):
+    if isinstance(obj, np.floating):
+        v = float(obj)
+        return None if (math.isnan(v) or math.isinf(v)) else v
+    if isinstance(obj, np.bool_):
         return bool(obj)
     if isinstance(obj, np.ndarray):
         return obj.tolist()
-    if pd.isna(obj):
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
         return None
     return obj
 
@@ -346,7 +354,7 @@ async def create_backtest_trade(payload: BacktestTradePayload):
     """Insert a manually verified backtest trade for record-keeping."""
     import uuid
     store = get_store()
-    trade_id = str(uuid.uuid4())[:16]
+    trade_id = str(uuid.uuid4())
     row = {
         "id": trade_id,
         "timestamp": payload.timestamp,
@@ -384,6 +392,23 @@ async def create_backtest_trade(payload: BacktestTradePayload):
     row = {k: v for k, v in row.items() if v is not None}
     store.insert_trade(row)
     return {"ok": True, "id": trade_id}
+
+
+@app.patch("/api/trades/{trade_id}")
+async def patch_trade(trade_id: str, body: dict):
+    store = get_store()
+    if store is None:
+        return JSONResponse(status_code=503, content={"error": "Store unavailable"})
+    trade = store.get_trade(trade_id)
+    if trade is None:
+        return JSONResponse(status_code=404, content={"error": "Trade not found"})
+    # Only allow patching non-critical fields — not id, instrument, direction, status
+    LOCKED = {"id", "instrument", "direction", "status", "trade_type", "chart_initial_png", "chart_final_png"}
+    updates = {k: v for k, v in body.items() if k not in LOCKED}
+    if not updates:
+        return JSONResponse(status_code=400, content={"error": "No patchable fields"})
+    store.update_trade(trade_id, updates)
+    return {"ok": True, "patched": list(updates.keys())}
 
 
 @app.get("/api/trades/{trade_id}")
@@ -480,44 +505,58 @@ async def get_monitor():
 
     result = []
     for coin in coins:
-        # Last 5m candle = proxy for last scan time
-        last_candle = store.conn.execute(
-            "SELECT MAX(timestamp) FROM candles WHERE instrument = ? AND timeframe = '5m'",
-            [coin],
-        ).fetchone()
-        candle_count = store.conn.execute(
-            "SELECT COUNT(*) FROM candles WHERE instrument = ? AND timeframe = '5m'",
-            [coin],
-        ).fetchone()[0]
-
-        # Latest signal
-        sig_row = store.conn.execute(
-            """SELECT timestamp, direction, confidence
-               FROM signals WHERE instrument = ?
-               ORDER BY timestamp DESC LIMIT 1""",
-            [coin],
-        ).fetchone()
-        signal_count = store.conn.execute(
-            "SELECT COUNT(*) FROM signals WHERE instrument = ?", [coin]
-        ).fetchone()[0]
-
-        # Latest close price
-        price_row = store.conn.execute(
-            "SELECT close FROM candles WHERE instrument = ? AND timeframe = '5m' ORDER BY timestamp DESC LIMIT 1",
-            [coin],
-        ).fetchone()
-
-        result.append(_clean({
-            "coin": coin,
-            "last_scan": last_candle[0] if last_candle else None,
-            "candle_count": candle_count,
-            "last_signal_time": sig_row[0] if sig_row else None,
-            "last_signal_direction": sig_row[1] if sig_row else None,
-            "last_signal_confidence": sig_row[2] if sig_row else None,
-            "signal_count": signal_count,
-            "last_price": price_row[0] if price_row else None,
-            "has_data": candle_count > 0,
-        }))
+        try:
+            last_candle = store.conn.execute(
+                "SELECT MAX(timestamp) FROM candles WHERE instrument = ? AND timeframe = '5m'",
+                [coin],
+            ).fetchone()
+            candle_count = store.conn.execute(
+                "SELECT COUNT(*) FROM candles WHERE instrument = ? AND timeframe = '5m'",
+                [coin],
+            ).fetchone()[0]
+            sig_row = store.conn.execute(
+                """SELECT timestamp, direction, confidence
+                   FROM signals WHERE instrument = ?
+                   ORDER BY timestamp DESC LIMIT 1""",
+                [coin],
+            ).fetchone()
+            signal_count = store.conn.execute(
+                "SELECT COUNT(*) FROM signals WHERE instrument = ?", [coin]
+            ).fetchone()[0]
+            price_row = store.conn.execute(
+                "SELECT close FROM candles WHERE instrument = ? AND timeframe = '5m' ORDER BY timestamp DESC LIMIT 1",
+                [coin],
+            ).fetchone()
+            # SMA20 + SMA50 from last 50 5m closes
+            closes_rows = store.conn.execute(
+                "SELECT close FROM candles WHERE instrument = ? AND timeframe = '5m' ORDER BY timestamp DESC LIMIT 50",
+                [coin],
+            ).fetchall()
+            closes = [r[0] for r in closes_rows]
+            sma20 = round(sum(closes[:20]) / 20, 4) if len(closes) >= 20 else None
+            sma50 = round(sum(closes[:50]) / 50, 4) if len(closes) >= 50 else None
+            trend = None
+            if sma20 is not None and sma50 is not None:
+                trend = "UP" if sma20 > sma50 else "DOWN"
+            result.append(_clean({
+                "coin": coin,
+                "last_scan": last_candle[0] if last_candle else None,
+                "candle_count": candle_count,
+                "last_signal_time": sig_row[0] if sig_row else None,
+                "last_signal_direction": sig_row[1] if sig_row else None,
+                "last_signal_confidence": sig_row[2] if sig_row else None,
+                "signal_count": signal_count,
+                "last_price": price_row[0] if price_row else None,
+                "has_data": candle_count > 0,
+                "sma20": sma20,
+                "sma50": sma50,
+                "trend": trend,
+            }))
+        except Exception:
+            result.append({"coin": coin, "has_data": False, "candle_count": 0,
+                           "last_scan": None, "last_price": None,
+                           "last_signal_time": None, "last_signal_direction": None,
+                           "last_signal_confidence": None, "signal_count": 0})
 
     return result
 

@@ -125,6 +125,54 @@ function CoinCard({ coin, delay, onClick }) {
         {formatPrice(coin.last_price)}
       </p>
 
+      {/* Trend badge — SMA20 vs SMA50 crossover */}
+      {coin.trend && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: '5px',
+          padding: '4px 10px', borderRadius: '8px', marginBottom: '10px',
+          background: coin.trend === 'UP' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+          border: coin.trend === 'UP' ? '1px solid rgba(16,185,129,0.25)' : '1px solid rgba(239,68,68,0.25)',
+        }}>
+          {coin.trend === 'UP'
+            ? <TrendingUp style={{ width: '12px', height: '12px', color: '#10b981' }} />
+            : <TrendingDown style={{ width: '12px', height: '12px', color: '#ef4444' }} />}
+          <span style={{
+            fontSize: '11px', fontWeight: 700, letterSpacing: '0.05em',
+            color: coin.trend === 'UP' ? '#10b981' : '#ef4444',
+          }}>
+            {coin.trend === 'UP' ? 'UPTREND' : 'DOWNTREND'}
+          </span>
+        </div>
+      )}
+
+      {/* SMA20 / SMA50 */}
+      {coin.sma20 != null && coin.sma50 != null && (
+        <div style={{
+          display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap',
+        }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '4px',
+            padding: '3px 8px', borderRadius: '6px',
+            background: 'rgba(33,150,243,0.08)', border: '1px solid rgba(33,150,243,0.2)',
+          }}>
+            <div style={{ width: '8px', height: '2px', background: '#2196f3', borderRadius: '1px' }} />
+            <span style={{ fontSize: '10px', color: '#2196f3', fontFamily: 'JetBrains Mono, monospace' }}>
+              SMA20 {formatPrice(coin.sma20)}
+            </span>
+          </div>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '4px',
+            padding: '3px 8px', borderRadius: '6px',
+            background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)',
+          }}>
+            <div style={{ width: '8px', height: '2px', background: 'rgba(255,255,255,0.65)', borderRadius: '1px' }} />
+            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.55)', fontFamily: 'JetBrains Mono, monospace' }}>
+              SMA50 {formatPrice(coin.sma50)}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Stats row */}
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
         {/* Candles */}
@@ -209,7 +257,7 @@ export default function Monitor() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000);
+    const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -378,7 +426,7 @@ export default function Monitor() {
       {/* Last refresh */}
       {lastRefresh && (
         <p style={{ fontSize: '11px', color: '#334155', textAlign: 'center' }}>
-          Updated {lastRefresh.toLocaleTimeString()} · auto-refreshes every 30s
+          Updated {lastRefresh.toLocaleTimeString()} · auto-refreshes every 10s
         </p>
       )}
     </div>
