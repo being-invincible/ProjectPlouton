@@ -27,9 +27,9 @@ class Settings(BaseSettings):
 
     # Strategy
     min_confidence_pct: float = 50.0
-    execution_tf_default: str = "5m"
-    confirmation_tf: str = "15m"
-    trend_tf: str = "1h"
+    execution_tf_default: str = "4h"
+    confirmation_tf: str = "1h"
+    trend_tf: str = "1d"
     atr_period: int = 14
     atr_sl_multiplier: float = 1.5
     min_slope_pct: float = 0.002

@@ -60,12 +60,8 @@ class CoinScanner:
             logger.warning(f"[{self.coin}] mtf trend failed: {e}")
             return None
 
-        # 4. Choose execution TF (15m if 1h slope strong)
-        exec_tf = settings.execution_tf_default
-        slope_1h = abs(mtf_trend.get("1h", {}).get("slope", 0))
-        if slope_1h >= 0.005:
-            exec_tf = "15m"
-
+        # 4. Execution on 4h — the only profitable TF per backtest data
+        exec_tf = settings.execution_tf_default   # "4h"
         exec_df = mtf_data.get(exec_tf)
         if exec_df is None or len(exec_df) < 50:
             return None
@@ -130,11 +126,15 @@ class CoinScanner:
         # 11. Discord
         zone_label = getattr(signal, "fib_zone_name", "GP")
         rsi_val    = getattr(signal, "rsi", 0)
+        t1d = mtf_trend.get("1d", {})
+        t1h = mtf_trend.get("1h", {})
+        t4h = mtf_trend.get("4h", {})
         mtf_summary = (
-            f"1h {'↑' if mtf_trend['1h']['trend']=='UP' else '↓'} {mtf_trend['1h']['trend']} "
-            f"(slope {mtf_trend['1h']['slope']*100:.2f}%) · "
-            f"15m {'↑' if mtf_trend['15m']['trend']=='UP' else '↓'} {mtf_trend['15m']['trend']} · "
-            f"{exec_tf} in {zone_label} zone · RSI {rsi_val:.1f}"
+            f"1d {'↑' if t1d.get('trend')=='UP' else '↓'} {t1d.get('trend','?')} · "
+            f"1h {'↑' if t1h.get('trend')=='UP' else '↓'} {t1h.get('trend','?')} "
+            f"(slope {t1h.get('slope',0)*100:.2f}%) · "
+            f"4h {'↑' if t4h.get('trend')=='UP' else '↓'} {t4h.get('trend','?')} retracing → "
+            f"{zone_label} zone · RSI {rsi_val:.1f}"
         )
         strategy_summary = f"Swing ${signal.swing_high:.4f} → ${signal.swing_low:.4f} · ATR {signal.atr:.4f} · Fib {signal.fib_level_triggered*100:.1f}%"
         await self.discord.send_signal(

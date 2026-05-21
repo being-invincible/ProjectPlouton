@@ -391,16 +391,16 @@ class DuckDBStore:
 
         Returns:
             {
+                "1d":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
+                "4h":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
                 "1h":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
-                "15m": {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
-                "5m":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
-                "stacked": True|False,       # All TFs agree?
-                "direction": "UP"|"DOWN"|"MIXED",  # Consensus direction
+                "stacked": True|False,       # 1d and 1h agree?
+                "direction": "UP"|"DOWN"|"MIXED",
             }
         """
         result = {}
 
-        for tf in ["1h", "15m", "5m"]:
+        for tf in ["1d", "4h", "1h"]:
             try:
                 row = self.conn.execute("""
                     WITH vma_calc AS (
@@ -470,12 +470,12 @@ class DuckDBStore:
                     "price": 0, "candles": 0,
                 }
 
-        # Stack consensus uses only anchor (1h) + confirmation (15m).
-        # The execution frame (5m) is where the pullback *entry* forms — requiring
-        # it to agree with the macro trend would block almost every valid trade.
+        # Stack consensus: 1d (macro) + 1h (intermediate) must agree.
+        # 4h is the execution TF where the pullback forms — it retraces against
+        # the macro trend by definition, so it is excluded from consensus.
         anchor_trends = [
             result[tf]["trend"]
-            for tf in ("1h", "15m")
+            for tf in ("1d", "1h")
             if result.get(tf, {}).get("trend") not in (None, "UNKNOWN")
         ]
         if len(anchor_trends) == 2 and len(set(anchor_trends)) == 1:

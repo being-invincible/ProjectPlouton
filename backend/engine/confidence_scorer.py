@@ -32,23 +32,22 @@ class ConfidenceScorer:
     def _mtf_alignment(self, mtf: dict, direction: str) -> float:
         wanted   = "UP"   if direction == "LONG" else "DOWN"
         opposite = "DOWN" if direction == "LONG" else "UP"
-        tf_1h  = mtf.get("1h",  {}).get("trend")
-        tf_15m = mtf.get("15m", {}).get("trend")
-        tf_5m  = mtf.get("5m",  {}).get("trend")
-        # 1h sets the primary trend — must align.
+        tf_1d = mtf.get("1d", {}).get("trend")
+        tf_1h = mtf.get("1h", {}).get("trend")
+        tf_4h = mtf.get("4h", {}).get("trend")
+
+        # 1d is the macro trend — must align (or be unknown for new coins).
+        if tf_1d not in (wanted, "UNKNOWN", None):
+            return 0.0
+        # 1h must align with macro trend.
         if tf_1h != wanted:
             return 0.0
-        # Classic golden pocket: 1h with us, 15m retracing, 5m bouncing back.
-        if tf_15m == opposite and tf_5m == wanted:
-            return 1.0
-        # All three aligned (momentum entry, less ideal for retracement but valid).
-        if tf_15m == wanted and tf_5m == wanted:
-            return 0.9
-        # 1h aligned, 15m retracing, 5m not yet confirmed.
-        if tf_15m == opposite:
-            return 0.65
-        # 1h and 15m aligned, 5m lagging.
-        return 0.7
+        # Classic 4h golden pocket: 1d+1h trending, 4h retracing into zone.
+        if tf_4h == opposite:
+            return 1.0   # ideal: price pulling back on 4h toward fib zone
+        if tf_4h == wanted:
+            return 0.75  # momentum alignment — less ideal retracement entry
+        return 0.6       # 4h trend unknown / neutral
 
     def _slope_strength(self, mtf: dict) -> float:
         slope = abs(mtf.get("1h", {}).get("slope", 0.0))
