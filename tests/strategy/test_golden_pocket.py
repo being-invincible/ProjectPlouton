@@ -57,3 +57,33 @@ def test_no_signal_when_mtf_disagrees():
     df = _make_df_from_closes(closes)
     mtf_trend = {"1h": {"trend": "DOWN", "slope": -0.005}, "15m": {"trend": "UP", "slope": 0.003}}
     assert s.analyze(df, mtf_trend=mtf_trend, coin="BTC") is None
+
+
+def test_sl_long_below_0382():
+    strat = GoldenPocketStrategy()
+    swing_high, swing_low = 2000.0, 1000.0
+    rng = swing_high - swing_low
+    fib_0382 = swing_low + 0.382 * rng   # = 1382.0
+    atr = 50.0
+    entry = swing_low + 0.55 * rng       # inside golden pocket
+
+    sl = strat._stop_loss(entry, atr, swing_high, swing_low, "LONG")
+
+    expected = fib_0382 - 0.5 * atr      # = 1357.0
+    assert abs(sl - expected) < 0.01, f"SL={sl}, expected={expected}"
+    assert sl < fib_0382, "SL must be below 0.382 level"
+
+
+def test_sl_short_above_0382():
+    strat = GoldenPocketStrategy()
+    swing_high, swing_low = 2000.0, 1000.0
+    rng = swing_high - swing_low
+    fib_0382_short = swing_high - 0.382 * rng  # = 1618.0
+    atr = 50.0
+    entry = swing_high - 0.55 * rng            # inside golden pocket short
+
+    sl = strat._stop_loss(entry, atr, swing_high, swing_low, "SHORT")
+
+    expected = fib_0382_short + 0.5 * atr      # = 1643.0
+    assert abs(sl - expected) < 0.01, f"SL={sl}, expected={expected}"
+    assert sl > fib_0382_short, "SL must be above 0.382 level for SHORT"

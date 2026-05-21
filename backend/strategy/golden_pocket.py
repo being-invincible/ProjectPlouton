@@ -81,27 +81,21 @@ class GoldenPocketStrategy:
         )
 
     def golden_pocket_zone(self, swing_low: float, swing_high: float, direction: str) -> GoldenPocketZone:
-        """Return the price zone bounded by 50% and 61.8% retracement."""
+        """Return the price zone bounded by the 50% and 61.8% Fibonacci levels (measured from swing low)."""
         rng = swing_high - swing_low
-        if direction == "UP":
-            upper = swing_high - 0.5 * rng
-            lower = swing_high - 0.618 * rng
-        else:
-            upper = swing_low + 0.618 * rng
-            lower = swing_low + 0.5 * rng
+        lower = swing_low + 0.5 * rng    # 50% level
+        upper = swing_low + 0.618 * rng  # 61.8% level
         return GoldenPocketZone(upper=upper, lower=lower)
 
     def _stop_loss(self, entry: float, atr: float, swing_high: float, swing_low: float, direction: str) -> float:
-        """Hybrid SL — whichever is FURTHER from entry: 78.6% Fib break or 1.5*ATR offset."""
+        """SL below/above 0.382 Fib level with 0.5*ATR buffer — structural invalidation."""
         rng = swing_high - swing_low
         if direction == "LONG":
-            sl_fib_break = swing_high - 0.786 * rng
-            sl_atr = entry - settings.atr_sl_multiplier * atr
-            return min(sl_fib_break, sl_atr)  # lower = further from entry
+            fib_0382 = swing_low + 0.382 * rng
+            return fib_0382 - 0.5 * atr
         else:
-            sl_fib_break = swing_low + 0.786 * rng
-            sl_atr = entry + settings.atr_sl_multiplier * atr
-            return max(sl_fib_break, sl_atr)  # higher = further from entry
+            fib_0382 = swing_high - 0.382 * rng
+            return fib_0382 + 0.5 * atr
 
     def _take_profits(self, entry: float, stop_loss: float, swing_high: float, swing_low: float, direction: str) -> tuple[float, float]:
         """TP1 = 1.5 R:R, TP2 = 1.618 Fib extension of the swing."""
@@ -140,20 +134,18 @@ class GoldenPocketStrategy:
         zone = self.golden_pocket_zone(swing.low, swing.high, swing.direction)
 
         last_close = float(df["Close"].iloc[-1])
-        last_high  = float(df["High"].iloc[-1])
-        last_low   = float(df["Low"].iloc[-1])
 
         if direction == "LONG":
-            if swing.direction != "UP":
-                return None
-            # Accept wick touch into zone (low dipped in) or close inside zone
-            if not (zone.lower <= last_low <= zone.upper or zone.lower <= last_close <= zone.upper):
-                return None
-        else:
+            # Swing high must be more recent — price currently retracing from the high
             if swing.direction != "DOWN":
                 return None
-            # Accept wick touch into zone (high reached in) or close inside zone
-            if not (zone.lower <= last_high <= zone.upper or zone.lower <= last_close <= zone.upper):
+            if not (zone.lower <= last_close <= zone.upper):
+                return None
+        else:
+            # Swing low must be more recent — price currently bouncing from the low
+            if swing.direction != "UP":
+                return None
+            if not (zone.lower <= last_close <= zone.upper):
                 return None
 
         atr_series = compute_atr(df, period=settings.atr_period)
