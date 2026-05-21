@@ -852,24 +852,34 @@ _FRONTEND_DIST = os.path.join(
     "..", "frontend", "dist",
 )
 
-if os.path.isdir(_FRONTEND_DIST):
-    # Serve static assets (JS/CSS/images) at /assets, /favicon.svg, etc.
-    app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="assets")
+_STATIC_MIME = {
+    ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+    ".woff2": "font/woff2", ".woff": "font/woff",
+}
 
-    @app.get("/favicon.svg")
-    async def favicon():
-        return Response(
-            content=open(os.path.join(_FRONTEND_DIST, "favicon.svg"), "rb").read(),
-            media_type="image/svg+xml",
-        )
+if os.path.isdir(_FRONTEND_DIST):
+    # Serve hashed JS/CSS bundles from /assets/
+    app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="assets")
 
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        """Serve index.html for all non-API routes so React Router works."""
+        """Serve static root files (images, fonts) or index.html for SPA routes."""
         if full_path.startswith("api/"):
             return JSONResponse(status_code=404, content={"error": "Not found"})
+        # Check if it's a real file in the dist root (logo, icons, fonts, etc.)
+        candidate = os.path.join(_FRONTEND_DIST, full_path)
+        if os.path.isfile(candidate):
+            ext = os.path.splitext(full_path)[1].lower()
+            mime = _STATIC_MIME.get(ext, "application/octet-stream")
+            return Response(content=open(candidate, "rb").read(), media_type=mime)
+        # Everything else → SPA index
         index = os.path.join(_FRONTEND_DIST, "index.html")
-        return Response(content=open(index, "rb").read(), media_type="text/html")
+        return Response(
+            content=open(index, "rb").read(),
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
 
 if __name__ == "__main__":

@@ -122,6 +122,36 @@ const api = {
     return res.json();
   },
 
+  /** Create a manual / backtest trade */
+  async createTrade(payload) {
+    const res = await fetch(`${API_BASE}/trades`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return res.json();
+  },
+
+  /** Patch a trade (correct pnl, status, etc.) */
+  async updateTrade(id, patch) {
+    const res = await fetch(`${API_BASE}/trades/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    return res.json();
+  },
+
+  /** Update active strategy params (same endpoint as settings) */
+  async updateStrategyParams(params) {
+    const res = await fetch(`${API_BASE}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return res.json();
+  },
+
   tradeChartUrl(id, type = 'final') {
     return `${API_BASE}/trades/${id}/chart?type=${type}`;
   },
