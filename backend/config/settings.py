@@ -21,17 +21,18 @@ class Settings(BaseSettings):
 
     # Paper trading
     paper_balance: float = 500.0
-    risk_per_trade_pct: float = 0.03
-    max_open_trades: int = 3
+    risk_per_trade_pct: float = 0.01
+    max_open_trades: int = 6
     daily_loss_limit_pct: float = 0.15
+
+    # Strategy selection: "golden_pocket" | "smc"
+    strategy_name: str = "golden_pocket"
 
     # Strategy
     min_confidence_pct: float = 60.0
     execution_tf_default: str = "5m"
     confirmation_tf: str = "15m"
     trend_tf: str = "1h"
-    # New: master trend filter (longer-TF gate that must agree with `trend_tf`).
-    # Set to "" to disable. 4h gives ~16h-48h trend context for 5m-15m execution.
     master_trend_tf: str = "4h"
     master_trend_min_slope_pct: float = 0.003
     atr_period: int = 14

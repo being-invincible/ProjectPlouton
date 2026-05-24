@@ -15,11 +15,10 @@ class AsyncRunner:
         self.scanners = scanners
 
     async def run_one_cycle(self) -> List[str]:
-        """Scan all coins in parallel. Returns list of trade_ids executed this cycle."""
-        results = await asyncio.gather(
-            *(s.scan() for s in self.scanners),
-            return_exceptions=True,
-        )
+        """Scan all coins sequentially so each scanner sees up-to-date open-trade state.
+        Running in parallel was a race: all scanners read open_trades before any trade
+        was written, so multiple could pass the quality filter in the same cycle.
+        """
         trade_ids: List[str] = []
         for s, r in zip(self.scanners, results):
             if isinstance(r, Exception):

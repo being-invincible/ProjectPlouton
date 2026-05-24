@@ -37,7 +37,8 @@ class DiscordNotifier:
             "color": color,
             "fields": [
                 {"name": "🎯 Confidence", "value": f"**{confidence:.0f}%**", "inline": True},
-                {"name": "Fib Level", "value": f"{signal.fib_level_triggered*100:.1f}%", "inline": True},
+                {"name": "Fib Zone", "value": f"{getattr(signal, 'fib_zone_name', 'GP')} ({signal.fib_level_triggered*100:.1f}%)", "inline": True},
+                {"name": "RSI", "value": f"{getattr(signal, 'rsi', 0):.1f}", "inline": True},
                 {"name": "Risk", "value": f"${position.risk_amount:.2f}", "inline": True},
                 {"name": "Entry", "value": f"`${signal.entry_price:,.4f}`", "inline": True},
                 {"name": "Stop Loss", "value": f"`${signal.stop_loss:,.4f}`", "inline": True},

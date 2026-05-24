@@ -76,7 +76,6 @@ export default function FibChart({ trade }) {
         }
         if (!containerRef.current) return;
 
-        // ── Sort candles ──────────────────────────────────────────
         const chartData = raw
           .map(c => ({
             time:   toUnix(c.timestamp),
@@ -85,7 +84,6 @@ export default function FibChart({ trade }) {
           }))
           .sort((a, b) => a.time - b.time);
 
-        // ── Parse trade fields ────────────────────────────────────
         const entry     = parseFloat(trade.entry_price);
         const slRaw     = parseFloat(trade.stop_loss);
         const tp1       = trade.tp1_price   ? parseFloat(trade.tp1_price)   : null;
@@ -93,8 +91,6 @@ export default function FibChart({ trade }) {
         const exitPrice = trade.exit_price  ? parseFloat(trade.exit_price)  : null;
         const direction = trade.direction;
 
-        // When old TP1_PARTIAL code moved SL to TP1, recover the original SL
-        // from the 1.5R formula: TP1 = entry ± 1.5*risk, so risk = |tp1-entry|/1.5
         const slMoved = tp1 !== null && Math.abs(slRaw - tp1) < 0.001;
         const sl = slMoved
           ? (direction === 'LONG'
@@ -106,13 +102,11 @@ export default function FibChart({ trade }) {
           ? toUnix(trade.exit_timestamp)
           : trade.closed_at ? toUnix(trade.closed_at) : null;
 
-        // Snap to nearest candle time
         const snap = (targetUnix) =>
           chartData.reduce((best, c) =>
             Math.abs(c.time - targetUnix) < Math.abs(best.time - targetUnix) ? c : best,
             chartData[0]).time;
 
-        // Compute simple moving average — returns array of { time, value } skipping warmup nulls
         const computeSMA = (data, period) =>
           data.reduce((acc, c, i) => {
             if (i < period - 1) return acc;
@@ -124,7 +118,6 @@ export default function FibChart({ trade }) {
 
         const entrySnapped = snap(entryUnix);
 
-        // Swing H/L — use saved values or compute from 100 candles before entry
         let swHigh = trade.swing_high ? parseFloat(trade.swing_high) : null;
         let swLow  = trade.swing_low  ? parseFloat(trade.swing_low)  : null;
         if (!swHigh || !swLow) {
@@ -135,7 +128,6 @@ export default function FibChart({ trade }) {
           }
         }
 
-        // ── Build chart ───────────────────────────────────────────
         const chart = createChart(containerRef.current, {
           layout: {
             background:  { color: BG },
@@ -160,7 +152,6 @@ export default function FibChart({ trade }) {
           handleScroll:    { vertTouchDrag: false },
         });
 
-        // ── Candles ───────────────────────────────────────────────
         const candleSeries = chart.addSeries(CandlestickSeries, {
           upColor:        UP,   downColor:        DOWN,
           borderUpColor:  UP,   borderDownColor:  DOWN,
@@ -168,7 +159,6 @@ export default function FibChart({ trade }) {
         });
         candleSeries.setData(chartData);
 
-        // ── Volume ────────────────────────────────────────────────
         const volSeries = chart.addSeries(HistogramSeries, {
           priceFormat: { type: 'volume' }, priceScaleId: 'vol',
         });
@@ -179,45 +169,33 @@ export default function FibChart({ trade }) {
           color: c.close >= c.open ? 'rgba(38,166,154,0.18)' : 'rgba(239,83,80,0.18)',
         })));
 
-        // ── SMA overlays ─────────────────────────────────────────
         const sma20data = computeSMA(chartData, 20);
         const sma50data = computeSMA(chartData, 50);
 
         const sma20Series = chart.addSeries(LineSeries, {
-          color:                   '#2196f3',
-          lineWidth:               1,
-          crosshairMarkerVisible:  false,
-          lastValueVisible:        false,
-          priceLineVisible:        false,
-          title:                   'SMA20',
+          color: '#2196f3', lineWidth: 1,
+          crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+          title: 'SMA20',
         });
         sma20Series.setData(sma20data);
 
         const sma50Series = chart.addSeries(LineSeries, {
-          color:                   'rgba(255,255,255,0.65)',
-          lineWidth:               1,
-          crosshairMarkerVisible:  false,
-          lastValueVisible:        false,
-          priceLineVisible:        false,
-          title:                   'SMA50',
+          color: 'rgba(255,255,255,0.65)', lineWidth: 1,
+          crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+          title: 'SMA50',
         });
         sma50Series.setData(sma50data);
 
-        // ── Markers (accumulate, sort, then set once) ─────────────
         const markers = [];
         let swHighTime = null;
         let swLowTime  = null;
 
-        // Draws a horizontal fib line from anchorTime to lastCandleTime (floating, not full-width)
         const addFibLine = (anchorTime, lastTime, price, color, lineWidth, label) => {
           try {
             const s = chart.addSeries(LineSeries, {
-              color,
-              lineWidth,
-              lineStyle: 0,
+              color, lineWidth, lineStyle: 0,
               crosshairMarkerVisible: false,
-              lastValueVisible: true,
-              priceLineVisible: false,
+              lastValueVisible: true, priceLineVisible: false,
               title: label,
             });
             s.setData([
@@ -227,11 +205,9 @@ export default function FibChart({ trade }) {
           } catch (_) {}
         };
 
-        // ── Fibonacci overlays ────────────────────────────────────
         if (swHigh && swLow) {
           const before = chartData.filter(c => c.time <= entrySnapped);
 
-          // Find candles whose high/low best match the swing prices
           const swHighCandle = before.length
             ? before.reduce((b, c) => Math.abs(c.high - swHigh) < Math.abs(b.high - swHigh) ? c : b)
             : null;
@@ -242,25 +218,15 @@ export default function FibChart({ trade }) {
           swHighTime = swHighCandle?.time ?? (entrySnapped - 3600 * 3);
           swLowTime  = swLowCandle?.time  ?? (entrySnapped - 3600 * 1);
 
-          // Swing markers on the candle chart
           markers.push({
-            time:     swHighTime,
-            position: 'aboveBar',
-            color:    '#ffd700',
-            shape:    'arrowDown',
-            text:     `Swing H  ${swHigh.toFixed(4)}`,
-            size:     2,
+            time: swHighTime, position: 'aboveBar', color: '#ffd700',
+            shape: 'arrowDown', text: `Swing H  ${swHigh.toFixed(4)}`, size: 2,
           });
           markers.push({
-            time:     swLowTime,
-            position: 'belowBar',
-            color:    '#ffd700',
-            shape:    'arrowUp',
-            text:     `Swing L  ${swLow.toFixed(4)}`,
-            size:     2,
+            time: swLowTime, position: 'belowBar', color: '#ffd700',
+            shape: 'arrowUp', text: `Swing L  ${swLow.toFixed(4)}`, size: 2,
           });
 
-          // Floating fib retracement lines — bounded LineSeries (anchorTime → lastCandleTime)
           const lastCandleTime = chartData[chartData.length - 1].time;
           const fibAnchorTime  = Math.min(swHighTime, swLowTime);
 
@@ -277,7 +243,6 @@ export default function FibChart({ trade }) {
               `${fib.label}  ${price.toFixed(2)}`);
           }
 
-          // Extension lines above swing high (1.272 gold, 1.414 red, 1.618 blue)
           const rng = swHigh - swLow;
           const EXT_LEVELS = [
             { mult: 0.272, label: '1.272', color: '#f59e0b', width: 2 },
@@ -290,7 +255,6 @@ export default function FibChart({ trade }) {
               `${ext.label}  ${price.toFixed(2)}`);
           }
 
-          // Golden Pocket zone fill — BaselineSeries with full candle data ensures render
           const gp50  = fibPrice(swHigh, swLow, 0.5);
           const gp618 = fibPrice(swHigh, swLow, 0.618);
           try {
@@ -308,39 +272,31 @@ export default function FibChart({ trade }) {
               priceLineVisible:  false,
               title:             '',
             });
-            // Use all candle times — avoids the 2-point rendering gap issue
             gpZone.setData(chartData.map(c => ({ time: c.time, value: gp618 })));
-          } catch (_) { /* GP price lines above already mark the zone */ }
+          } catch (_) {}
 
-          // Diagonal Fib-tool handle: visually shows WHERE the measurement was drawn
           try {
             const diagSeries = chart.addSeries(LineSeries, {
-              color: 'rgba(255,215,0,0.5)',
-              lineWidth: 1,
-              lineStyle: 1,
-              crosshairMarkerVisible: false,
-              lastValueVisible:       false,
-              priceLineVisible:       false,
-              title:                  '',
+              color: 'rgba(255,215,0,0.5)', lineWidth: 1, lineStyle: 1,
+              crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+              title: '',
             });
             diagSeries.setData([
               { time: swHighTime, value: swHigh },
               { time: swLowTime,  value: swLow  },
             ]);
-          } catch (_) { /* not critical */ }
+          } catch (_) {}
         }
 
-        // ── Entry marker ──────────────────────────────────────────
         markers.push({
-          time:     entrySnapped,
+          time: entrySnapped,
           position: direction === 'LONG' ? 'belowBar' : 'aboveBar',
-          color:    '#2196f3',
-          shape:    direction === 'LONG' ? 'arrowUp' : 'arrowDown',
-          text:     `ENTRY  ${entry.toFixed(4)}`,
-          size:     3,
+          color: '#2196f3',
+          shape: direction === 'LONG' ? 'arrowUp' : 'arrowDown',
+          text: `ENTRY  ${entry.toFixed(4)}`,
+          size: 3,
         });
 
-        // ── TP1 marker (milestone — position not closed here) ─────
         if (tp1 !== null && trade.tp1_hit) {
           const afterEntry = chartData.filter(c => c.time > entrySnapped);
           const tp1Candle = direction === 'LONG'
@@ -348,42 +304,37 @@ export default function FibChart({ trade }) {
             : afterEntry.find(c => c.low  <= tp1);
           if (tp1Candle) {
             markers.push({
-              time:     tp1Candle.time,
+              time: tp1Candle.time,
               position: direction === 'LONG' ? 'aboveBar' : 'belowBar',
-              color:    '#26a69a',
-              shape:    'circle',
-              text:     `TP1  ${tp1.toFixed(4)}`,
-              size:     1,
+              color: '#26a69a', shape: 'circle',
+              text: `TP1  ${tp1.toFixed(4)}`, size: 1,
             });
           }
         }
 
-        // ── Exit marker — use timestamp if available, else find by price ──
         let exitSnapped = null;
         if (exitPrice) {
           if (exitUnix) {
             exitSnapped = snap(exitUnix);
           } else {
-            // Fallback: first candle after entry where price was hit
             const afterEntry = chartData.filter(c => c.time > entrySnapped);
             const hitCandle = direction === 'LONG'
-              ? afterEntry.find(c => c.high >= exitPrice)   // exit hit on high
-              : afterEntry.find(c => c.low  <= exitPrice);  // exit hit on low
+              ? afterEntry.find(c => c.high >= exitPrice)
+              : afterEntry.find(c => c.low  <= exitPrice);
             if (hitCandle) exitSnapped = hitCandle.time;
           }
           if (exitSnapped) {
             markers.push({
-              time:     exitSnapped,
+              time: exitSnapped,
               position: direction === 'LONG' ? 'aboveBar' : 'belowBar',
-              color:    '#f59e0b',
-              shape:    direction === 'LONG' ? 'arrowDown' : 'arrowUp',
-              text:     `EXIT(${trade.exit_reason || 'CLOSE'})  ${exitPrice.toFixed(4)}`,
-              size:     2,
+              color: '#f59e0b',
+              shape: direction === 'LONG' ? 'arrowDown' : 'arrowUp',
+              text: `EXIT(${trade.exit_reason || 'CLOSE'})  ${exitPrice.toFixed(4)}`,
+              size: 2,
             });
           }
         }
 
-        // ── ZigZag overlay ────────────────────────────────────────
         if (zigzag && Array.isArray(zigzag.pivots) && zigzag.pivots.length >= 2) {
           const pivotPoints = zigzag.pivots
             .map(p => ({ time: toUnix(p.time), value: p.price, kind: p.kind, confirmed: p.confirmed }))
@@ -393,46 +344,37 @@ export default function FibChart({ trade }) {
           if (pivotPoints.length >= 2) {
             try {
               const zigSeries = chart.addSeries(LineSeries, {
-                color:                  '#a855f7',
-                lineWidth:              2,
-                lineStyle:              0,
-                crosshairMarkerVisible: false,
-                lastValueVisible:       false,
-                priceLineVisible:       false,
-                title:                  'ZigZag',
+                color: '#a855f7', lineWidth: 2, lineStyle: 0,
+                crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+                title: 'ZigZag',
               });
               zigSeries.setData(pivotPoints.map(p => ({ time: p.time, value: p.value })));
-            } catch (_) { /* skip if duplicate times collide */ }
+            } catch (_) {}
 
             for (const p of pivotPoints) {
               markers.push({
-                time:     p.time,
+                time: p.time,
                 position: p.kind === 'HIGH' ? 'aboveBar' : 'belowBar',
-                color:    p.confirmed ? '#a855f7' : 'rgba(168,85,247,0.45)',
-                shape:    p.kind === 'HIGH' ? 'arrowDown' : 'arrowUp',
-                text:     `${p.kind === 'HIGH' ? 'H' : 'L'}${p.confirmed ? '' : '?'}  ${p.value.toFixed(2)}`,
-                size:     1,
+                color: p.confirmed ? '#a855f7' : 'rgba(168,85,247,0.45)',
+                shape: p.kind === 'HIGH' ? 'arrowDown' : 'arrowUp',
+                text: `${p.kind === 'HIGH' ? 'H' : 'L'}${p.confirmed ? '' : '?'}  ${p.value.toFixed(2)}`,
+                size: 1,
               });
             }
 
-            // Confirmation line — price level the market must cross to invalidate the latest pivot
             if (zigzag.confirmation_price != null) {
               try {
                 candleSeries.createPriceLine({
-                  price:            zigzag.confirmation_price,
-                  color:            'rgba(168,85,247,0.6)',
-                  lineWidth:        1,
-                  lineStyle:        2,
-                  axisLabelVisible: true,
-                  title:            'ZZ Confirm',
+                  price: zigzag.confirmation_price,
+                  color: 'rgba(168,85,247,0.6)', lineWidth: 1, lineStyle: 2,
+                  axisLabelVisible: true, title: 'ZZ Confirm',
                 });
-              } catch (_) { /* not critical */ }
+              } catch (_) {}
             }
           }
         }
 
         markers.sort((a, b) => a.time - b.time);
-        // Deduplicate markers at exact same (time, shape) — lightweight-charts rejects dups
         const seen = new Set();
         const dedupedMarkers = markers.filter(m => {
           const key = `${m.time}-${m.shape}-${m.position}`;
@@ -442,7 +384,6 @@ export default function FibChart({ trade }) {
         });
         createSeriesMarkers(candleSeries, dedupedMarkers);
 
-        // ── Trade level price lines ────────────────────────────────
         candleSeries.createPriceLine({
           price: entry, color: '#2196f3', lineWidth: 2, lineStyle: 0,
           axisLabelVisible: true, title: `${direction} ENTRY`,
@@ -470,7 +411,6 @@ export default function FibChart({ trade }) {
           });
         }
 
-        // ── Zoom: from earliest swing marker to exit (+ padding) ──
         const PAD = 8;
         const swingFromTime = swHigh && swLow
           ? Math.min(

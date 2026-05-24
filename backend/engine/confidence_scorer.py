@@ -19,12 +19,13 @@ class ConfidenceScorer:
       * 5-wave Fibonacci harmony — price at 1.618/2.618/3.618 of wave 1 (+5)
     """
 
-    W_MTF       = 25
-    W_SLOPE     = 20
-    W_PATTERN   = 20
-    W_VOLUME    = 15
+    W_MTF       = 20
+    W_SLOPE     = 18
+    W_PATTERN   = 18
+    W_VOLUME    = 14
     W_EMA       = 10
     W_ATR_SANE  = 10
+    W_RSI       = 10   # RSI confirmation from QuantInsti best practices
 
     # Confluence bonuses
     B_CHOCH     = 8
@@ -52,6 +53,10 @@ class ConfidenceScorer:
 
         if df_1m is not None and len(df_1m) >= 50:
             score += self._fib_1m_confluence(df_1m, signal) * self.B_1M_FIB
+
+        # GP zone scores slightly higher than 38.2% (deeper retracement = stronger support)
+        if getattr(signal, "fib_zone_name", "GP") == "38.2":
+            score *= 0.96
 
         return max(0.0, min(95.0, score))
 
@@ -176,7 +181,7 @@ class ConfidenceScorer:
         tf_15m = mtf.get("15m", {}).get("trend")
         tf_5m  = mtf.get("5m",  {}).get("trend")
 
-        # 4h is now a SOFT signal — boost when it agrees, neutralise when it doesn't.
+        # 4h is a SOFT signal — boost when it agrees, neutralise when it doesn't.
         # Base score derives from 1h/15m/5m alignment.
         if tf_1h == wanted and tf_15m == opposite and tf_5m == wanted:
             base = 1.0   # classic retrace bounce
@@ -187,7 +192,6 @@ class ConfidenceScorer:
         elif tf_1h == wanted:
             base = 0.55  # only 1h with us
         elif tf_15m == wanted and tf_5m == wanted:
-            # NY-style: 1h still flips but 15m/5m caught the impulse — valid setup
             base = 0.5
         else:
             base = 0.2
@@ -200,7 +204,12 @@ class ConfidenceScorer:
         return base
 
     def _slope_strength(self, mtf: dict) -> float:
-        slope = abs(mtf.get("1h", {}).get("slope", 0.0))
+        # At a fib retracement, 1h slope is naturally flat (that's the pullback).
+        # Use the strongest slope across timeframes: 1d measures macro trend,
+        # 1h measures entry momentum. Either a strong macro or 1h trend earns points.
+        slope_1d = abs(mtf.get("1d", {}).get("slope", 0.0))
+        slope_1h = abs(mtf.get("1h", {}).get("slope", 0.0))
+        slope = max(slope_1d, slope_1h)
         if slope < 0.002:
             return 0.0
         if slope >= 0.01:
@@ -264,6 +273,30 @@ class ConfidenceScorer:
         if abs(signal.entry_price - ema50) < threshold or abs(signal.entry_price - ema200) < threshold:
             return 1.0
         return 0.0
+
+    def _rsi_score(self, signal) -> float:
+        """
+        Score RSI confirmation quality.
+        LONG: RSI 30-45 = ideal oversold zone (1.0), 45-55 = acceptable (0.5)
+        SHORT: RSI 55-70 = ideal overbought zone (1.0), 45-55 = acceptable (0.5)
+        """
+        rsi = getattr(signal, "rsi", 50.0)
+        if signal.direction == "LONG":
+            if rsi <= 30:
+                return 0.8   # extremely oversold can mean momentum still down
+            if rsi <= 40:
+                return 1.0
+            if rsi <= 50:
+                return 0.7
+            return 0.3       # 50-55 passed the gate but weak confirmation
+        else:
+            if rsi >= 70:
+                return 0.8
+            if rsi >= 60:
+                return 1.0
+            if rsi >= 50:
+                return 0.7
+            return 0.3
 
     def _atr_sanity(self, signal) -> float:
         rng = signal.swing_high - signal.swing_low

@@ -63,7 +63,7 @@ class SignalGenerator:
             logger.info(
                 f"MTF gate: PASS ({direction}) | "
                 f"1h={mtf_trend.get('1h', {}).get('trend', '?')} "
-                f"(slope={mtf_trend.get('1h', {}).get('slope', 0):.4f}%) "
+                f"(slope={mtf_trend.get('1h', {}).get('slope', 0) * 100:.2f}%) "
                 f"15m={mtf_trend.get('15m', {}).get('trend', '?')} "
                 f"5m={mtf_trend.get('5m', {}).get('trend', '?')}"
             )

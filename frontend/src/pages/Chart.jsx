@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, createSeriesMarkers } from 'lightweight-charts';
 import {
@@ -10,13 +10,15 @@ import { formatCurrency } from '../lib/utils';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
+import TradingViewChart from '../components/TradingViewChart';
 
 const TIMEFRAMES = [
   { value: '1m', label: '1min' },
   { value: '5m', label: '5min' },
   { value: '15m', label: '15min' },
-  { value: '30m', label: '30min' },
   { value: '1h', label: '1H' },
+  { value: '4h', label: '4H' },
+  { value: '1d', label: '1D' },
 ];
 
 function resampleCandles(candles, targetMinutes) {
@@ -41,6 +43,7 @@ function resampleCandles(candles, targetMinutes) {
   }
   return [...groups.values()].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 }
+
 
 const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'SUI', 'TAO', 'LINK', 'HYPE', 'ADA'];
 
@@ -153,12 +156,10 @@ function inNySession(unixSec) {
 
 export default function Chart() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const chartContainerRef = useRef(null);
-  const chartRef = useRef(null);
   const [candles, setCandles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [instrument, setInstrument] = useState(searchParams.get('coin') || 'BTC');
-  const [timeframe, setTimeframe] = useState('5m');
+  const [timeframe, setTimeframe] = useState('4h');
   const [mtfTrend, setMtfTrend] = useState(null);
   const [coinMonitor, setCoinMonitor] = useState(null);
   const [zigzag, setZigzag] = useState(null);
@@ -213,7 +214,7 @@ export default function Chart() {
         api.getFibExtensions(instrument, ovTf, { periods: 1000, atrMult: 2.0 }).catch(() => null),
       ]);
       const raw = Array.isArray(candleData) ? candleData : [];
-      setCandles(timeframe === '30m' ? resampleCandles(raw, 30) : raw);
+      setCandles(raw);
       setMtfTrend(trend);
       setZigzag(zz);
       setFvgData(fvg);
@@ -689,6 +690,7 @@ export default function Chart() {
 
   }, [overlays, candles, zigzag, fvgData, fibExt, rsiCloud, structure]);
 
+
   const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
   const firstCandle = candles.length > 0 ? candles[0] : null;
   const currentPrice = lastCandle?.close ?? 0;
@@ -782,24 +784,15 @@ export default function Chart() {
           ) : (
             <div style={{ position: 'relative' }}>
               <div ref={chartContainerRef} style={{ height: '560px', padding: '0 8px 8px' }} />
-
-              {/* NY session bands — DOM overlay positioned via timeScale coordinates.
-                  Sits behind toolbar but above chart pane via z-index. Pointer-events
-                  off so chart interactions still work. */}
               {overlays.nyOpen && nyBands.length > 0 && (
                 <div style={{
-                  position: 'absolute',
-                  top: 0, left: 0, right: 0,
-                  height: 'calc(70% - 8px)',  // main pane only; RSI pane sits below
-                  pointerEvents: 'none',
-                  overflow: 'hidden',
+                  position: 'absolute', top: 0, left: 0, right: 0,
+                  height: 'calc(70% - 8px)', pointerEvents: 'none', overflow: 'hidden',
                 }}>
                   {nyBands.map((b, i) => (
                     <div key={i} style={{
-                      position: 'absolute',
-                      top: 0, bottom: 0,
-                      left: `${b.left + 8}px`,  // +8 to match container padding
-                      width: `${b.width}px`,
+                      position: 'absolute', top: 0, bottom: 0,
+                      left: `${b.left + 8}px`, width: `${b.width}px`,
                       background: 'rgba(180,200,220,0.06)',
                       borderLeft: '1px solid rgba(180,200,220,0.10)',
                       borderRight: '1px solid rgba(180,200,220,0.10)',
@@ -807,7 +800,6 @@ export default function Chart() {
                   ))}
                 </div>
               )}
-
               <IndicatorToolbar overlays={overlays} onToggle={(k) => setOverlays(o => ({ ...o, [k]: !o[k] }))} />
             </div>
           )}
@@ -873,7 +865,7 @@ export default function Chart() {
                   {t.trend || '?'}
                 </Badge>
                 <span style={{ fontSize: '10px', color: '#475569', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {t.slope != null ? `${t.slope > 0 ? '+' : ''}${t.slope}%` : ''}
+                  {t.slope != null ? `${t.slope > 0 ? '+' : ''}${(t.slope * 100).toFixed(2)}%` : ''}
                 </span>
               </div>
             );

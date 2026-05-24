@@ -1,0 +1,223 @@
+//@version=6
+// =============================================================================
+//  FIBONACCI GOLDEN ZONE CONFLUENCE STRATEGY
+//  (1) Swap Zone Confluence  (2) 50 EMA Confluence
+//  Entry trigger: engulfing bar inside the 50-61.8% Golden Zone.
+//  --- Source spec for backend/strategy/fib_golden_zone.py (Python port) ---
+// =============================================================================
+
+strategy(
+     title              = "Fib Golden Zone Confluence (H4)",
+     shorttitle         = "FibGZ",
+     overlay            = true,
+     pyramiding         = 0,
+     initial_capital    = 10000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 10,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.04,
+     slippage           = 2,
+     calc_on_every_tick = false)
+
+// ============================ INPUTS =========================================
+grpStrat = "Strategy Selection"
+enableSwap  = input.bool(true, "Enable Strategy 1: Swap Zone confluence", group = grpStrat)
+enableEMA   = input.bool(true, "Enable Strategy 2: 50 EMA confluence",    group = grpStrat)
+allowLongs  = input.bool(true, "Allow long trades",  group = grpStrat)
+allowShorts = input.bool(true, "Allow short trades", group = grpStrat)
+
+grpFib = "Fibonacci / Golden Zone"
+fibLow  = input.float(0.50,  "Golden Zone start (retracement)", minval = 0.1, maxval = 0.9,  step = 0.001, group = grpFib)
+fibHigh = input.float(0.618, "Golden Zone end (retracement)",   minval = 0.1, maxval = 0.95, step = 0.001, group = grpFib)
+maxBarsSinceSwing = input.int(40, "Max bars a swing stays valid", minval = 3, group = grpFib)
+
+grpFrac = "Swing Detection (Fractals)"
+fracN = input.int(5, "Fractal window (odd; 5 = 2 bars each side)", minval = 3, maxval = 9, step = 2, group = grpFrac)
+
+grpEMA = "EMA Filter"
+emaLen = input.int(50, "EMA length", minval = 5, group = grpEMA)
+requireEmaSlope = input.bool(true, "Require EMA sloped with trend", group = grpEMA)
+
+grpConf = "Confluence Tolerance"
+atrLen     = input.int(14, "ATR length", minval = 1, group = grpConf)
+atrTolMult = input.float(0.25, "Confluence tolerance (x ATR)", minval = 0.0, step = 0.05, group = grpConf)
+
+grpEng = "Engulfing Trigger"
+fullEngulf = input.bool(false, "Require full engulf (wicks too), not just body", group = grpEng)
+
+grpRisk = "Risk Management"
+stopBasis  = input.string("Swing extreme", "Stop-loss basis", options = ["Swing extreme", "78.6% fib"], group = grpRisk)
+stopBufATR = input.float(0.25, "Stop buffer (x ATR)", minval = 0.0, step = 0.05, group = grpRisk)
+tpBasis    = input.string("Risk multiple", "Take-profit basis", options = ["Risk multiple", "1.618 extension"], group = grpRisk)
+rrTarget   = input.float(2.0, "Reward:Risk (if Risk multiple)", minval = 0.5, step = 0.1, group = grpRisk)
+
+// ============================ CORE SERIES ====================================
+ema  = ta.ema(close, emaLen)
+atr  = ta.atr(atrLen)
+half = math.floor(fracN / 2)
+
+// ---- NON-REPAINTING FRACTALS (center = high[half]/low[half]) ----
+isUpFractal() =>
+    bool ok = true
+    c = high[half]
+    for i = 1 to half
+        if (high[half - i] >= c) or (high[half + i] >= c)
+            ok := false
+    ok
+
+isDownFractal() =>
+    bool ok = true
+    c = low[half]
+    for i = 1 to half
+        if (low[half - i] <= c) or (low[half + i] <= c)
+            ok := false
+    ok
+
+upFrac   = isUpFractal()
+downFrac = isDownFractal()
+
+var float swingHighPrice = na
+var int   swingHighBar   = na
+var float swingLowPrice  = na
+var int   swingLowBar     = na
+
+if upFrac
+    swingHighPrice := high[half]
+    swingHighBar   := bar_index - half
+if downFrac
+    swingLowPrice := low[half]
+    swingLowBar   := bar_index - half
+
+var array<float> upLevels = array.new<float>()
+var array<int>   upBars   = array.new<int>()
+var array<float> dnLevels = array.new<float>()
+var array<int>   dnBars   = array.new<int>()
+if upFrac
+    array.push(upLevels, high[half])
+    array.push(upBars,   bar_index - half)
+if downFrac
+    array.push(dnLevels, low[half])
+    array.push(dnBars,   bar_index - half)
+if array.size(upLevels) > 50
+    array.shift(upLevels)
+    array.shift(upBars)
+if array.size(dnLevels) > 50
+    array.shift(dnLevels)
+    array.shift(dnBars)
+
+// ============================ IMPULSE & GOLDEN ZONE ==========================
+longImpulseValid = not na(swingHighPrice) and not na(swingLowPrice) and
+     swingHighBar > swingLowBar and (bar_index - swingHighBar) <= maxBarsSinceSwing and
+     swingHighPrice > swingLowPrice
+
+shortImpulseValid = not na(swingHighPrice) and not na(swingLowPrice) and
+     swingLowBar > swingHighBar and (bar_index - swingLowBar) <= maxBarsSinceSwing and
+     swingHighPrice > swingLowPrice
+
+longRange  = longImpulseValid ? (swingHighPrice - swingLowPrice) : na
+gzLongHigh = longImpulseValid ? (swingHighPrice - fibLow  * longRange) : na
+gzLongLow  = longImpulseValid ? (swingHighPrice - fibHigh * longRange) : na
+fib786Long = longImpulseValid ? (swingHighPrice - 0.786   * longRange) : na
+
+shortRange  = shortImpulseValid ? (swingHighPrice - swingLowPrice) : na
+gzShortLow  = shortImpulseValid ? (swingLowPrice + fibLow  * shortRange) : na
+gzShortHigh = shortImpulseValid ? (swingLowPrice + fibHigh * shortRange) : na
+fib786Short = shortImpulseValid ? (swingLowPrice + 0.786   * shortRange) : na
+
+tol = atr * atrTolMult
+
+// ============================ CONFLUENCE CHECKS ==============================
+emaConfLong  = longImpulseValid  and ema <= (gzLongHigh + tol)  and ema >= (gzLongLow - tol)
+emaConfShort = shortImpulseValid and ema <= (gzShortHigh + tol) and ema >= (gzShortLow - tol)
+
+swapConfLong = false
+if longImpulseValid
+    for i = 0 to array.size(upLevels) - 1
+        lvl  = array.get(upLevels, i)
+        bIdx = array.get(upBars, i)
+        if (bIdx < swingLowBar) and (lvl <= gzLongHigh + tol) and (lvl >= gzLongLow - tol) and (swingHighPrice > lvl)
+            swapConfLong := true
+
+swapConfShort = false
+if shortImpulseValid
+    for i = 0 to array.size(dnLevels) - 1
+        lvl  = array.get(dnLevels, i)
+        bIdx = array.get(dnBars, i)
+        if (bIdx < swingHighBar) and (lvl <= gzShortHigh + tol) and (lvl >= gzShortLow - tol) and (swingLowPrice < lvl)
+            swapConfShort := true
+
+// ============================ TREND FILTER ===================================
+emaRisingOk  = not requireEmaSlope or (ema > ema[1])
+emaFallingOk = not requireEmaSlope or (ema < ema[1])
+trendLongOk  = close > ema and emaRisingOk
+trendShortOk = close < ema and emaFallingOk
+
+// ============================ ENGULFING TRIGGER ==============================
+bodyBullEngulf = (close > open) and (close[1] < open[1]) and (close >= open[1]) and (open <= close[1])
+bodyBearEngulf = (close < open) and (close[1] > open[1]) and (close <= open[1]) and (open >= close[1])
+wickOk = not fullEngulf or (high > high[1] and low < low[1])
+bullEngulf = bodyBullEngulf and wickOk
+bearEngulf = bodyBearEngulf and wickOk
+
+inZoneLong  = longImpulseValid  and (low  <= gzLongHigh)  and (high >= gzLongLow)
+inZoneShort = shortImpulseValid and (high >= gzShortLow)  and (low  <= gzShortHigh)
+
+// ============================ ENTRY ASSEMBLY =================================
+longConfluence  = (enableEMA and emaConfLong)  or (enableSwap and swapConfLong)
+shortConfluence = (enableEMA and emaConfShort) or (enableSwap and swapConfShort)
+
+longSignal  = allowLongs  and longImpulseValid  and inZoneLong  and bullEngulf and longConfluence  and trendLongOk
+shortSignal = allowShorts and shortImpulseValid and inZoneShort and bearEngulf and shortConfluence and trendShortOk
+
+// ============================ RISK MANAGEMENT ================================
+longStopRef  = stopBasis == "78.6% fib" ? fib786Long  : swingLowPrice
+shortStopRef = stopBasis == "78.6% fib" ? fib786Short : swingHighPrice
+longStop  = longStopRef  - stopBufATR * atr
+shortStop = shortStopRef + stopBufATR * atr
+
+longExt1618  = longImpulseValid  ? (swingLowPrice  + 1.618 * longRange)  : na
+shortExt1618 = shortImpulseValid ? (swingHighPrice - 1.618 * shortRange) : na
+
+var float entryPrice = na
+var float stopPrice  = na
+var float tpPrice    = na
+
+if longSignal and strategy.position_size == 0
+    entryPrice := close
+    stopPrice  := longStop
+    risk       = entryPrice - stopPrice
+    tpPrice    := tpBasis == "1.618 extension" ? longExt1618 : (entryPrice + rrTarget * risk)
+    if risk > 0
+        strategy.entry("L", strategy.long)
+        strategy.exit("L-exit", "L", stop = stopPrice, limit = tpPrice)
+
+if shortSignal and strategy.position_size == 0
+    entryPrice := close
+    stopPrice  := shortStop
+    risk       = stopPrice - entryPrice
+    tpPrice    := tpBasis == "1.618 extension" ? shortExt1618 : (entryPrice - rrTarget * risk)
+    if risk > 0
+        strategy.entry("S", strategy.short)
+        strategy.exit("S-exit", "S", stop = stopPrice, limit = tpPrice)
+
+// ============================ PLOTTING =======================================
+plot(ema, "50 EMA", color = color.orange, linewidth = 2)
+plot(longImpulseValid  ? gzLongHigh  : na, "GZ Long 50%",    color = color.new(color.green, 0), style = plot.style_linebr)
+plot(longImpulseValid  ? gzLongLow   : na, "GZ Long 61.8%",  color = color.new(color.green, 0), style = plot.style_linebr)
+plot(shortImpulseValid ? gzShortLow  : na, "GZ Short 50%",   color = color.new(color.red, 0),   style = plot.style_linebr)
+plot(shortImpulseValid ? gzShortHigh : na, "GZ Short 61.8%", color = color.new(color.red, 0),   style = plot.style_linebr)
+
+plotshape(upFrac,   "Up fractal",   shape.triangledown, location.abovebar, color.red,   offset = -half, size = size.tiny)
+plotshape(downFrac, "Down fractal", shape.triangleup,   location.belowbar, color.green, offset = -half, size = size.tiny)
+plotshape(longSignal,  "Long entry",  shape.labelup,   location.belowbar, color.new(color.green, 0), text = "L", textcolor = color.white, size = size.small)
+plotshape(shortSignal, "Short entry", shape.labeldown, location.abovebar, color.new(color.red, 0),   text = "S", textcolor = color.white, size = size.small)
+
+gzTop = longImpulseValid ? gzLongHigh : (shortImpulseValid ? gzShortHigh : na)
+gzBot = longImpulseValid ? gzLongLow  : (shortImpulseValid ? gzShortLow  : na)
+p1 = plot(gzTop, "GZ top", display = display.none)
+p2 = plot(gzBot, "GZ bot", display = display.none)
+fill(p1, p2, color = color.new(color.blue, 90), title = "Golden Zone fill")
+
+// ============================ ALERTS =========================================
+alertcondition(longSignal,  "FibGZ Long",  "Long signal in Golden Zone")
+alertcondition(shortSignal, "FibGZ Short", "Short signal in Golden Zone")

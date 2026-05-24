@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Save, RotateCcw, DollarSign, CheckCircle, Info, Coins, Bot, Activity } from 'lucide-react';
+import { Save, RotateCcw, DollarSign, CheckCircle, Bot, Target } from 'lucide-react';
 import api from '../lib/api';
-import HelpTooltip from '../components/HelpTooltip';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { InputField, Input, Select } from '../components/ui/Input';
@@ -9,10 +8,18 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { Badge } from '../components/ui/Badge';
 
 export default function Settings() {
+  // Bot settings
   const [balance, setBalance] = useState(500);
   const [instrument, setInstrument] = useState('BTC');
   const [tradingMode, setTradingMode] = useState('paper');
   const [forceMarketOpen, setForceMarketOpen] = useState(false);
+
+  // Strategy params (live-tunable, no restart needed)
+  const [minConfidence, setMinConfidence] = useState(50);
+  const [riskPct, setRiskPct] = useState(1.0);
+  const [maxOpenTrades, setMaxOpenTrades] = useState(3);
+  const [minSlopePct, setMinSlopePct] = useState(0.5);
+
   const [botState, setBotState] = useState({});
   const [runtime, setRuntime] = useState({});
   const [saving, setSaving] = useState(false);
@@ -29,19 +36,18 @@ export default function Settings() {
         api.getSettings(),
       ]);
 
-      if (state && Object.keys(state).length > 0) {
-        setBotState(state);
-      }
-
-      if (runtimeInfo && Object.keys(runtimeInfo).length > 0) {
-        setRuntime(runtimeInfo);
-      }
+      if (state && Object.keys(state).length > 0) setBotState(state);
+      if (runtimeInfo && Object.keys(runtimeInfo).length > 0) setRuntime(runtimeInfo);
 
       if (settingsState && Object.keys(settingsState).length > 0) {
         setBalance(settingsState.balance ?? 500);
         setInstrument(settingsState.instrument || 'BTC');
         setTradingMode((settingsState.trading_mode || 'paper').toLowerCase());
         setForceMarketOpen(Boolean(settingsState.force_market_open));
+        setMinConfidence(settingsState.min_confidence_pct ?? 50);
+        setRiskPct(settingsState.risk_per_trade_pct ?? 1.0);
+        setMaxOpenTrades(settingsState.max_open_trades ?? 3);
+        setMinSlopePct(settingsState.min_slope_pct ?? 0.5);
       }
     } catch (err) { console.error('Failed to fetch settings:', err); }
     finally { setLoading(false); }
@@ -55,6 +61,10 @@ export default function Settings() {
         balance: Number(balance),
         trading_mode: tradingMode,
         force_market_open: forceMarketOpen,
+        min_confidence_pct: Number(minConfidence),
+        risk_per_trade_pct: Number(riskPct),
+        max_open_trades: Number(maxOpenTrades),
+        min_slope_pct: Number(minSlopePct),
       });
       await fetchSettings();
       setSaved(true);
@@ -68,12 +78,17 @@ export default function Settings() {
     setBalance(500);
     setTradingMode('paper');
     setForceMarketOpen(false);
+    setMinConfidence(50);
+    setRiskPct(1.0);
+    setMaxOpenTrades(3);
+    setMinSlopePct(0.5);
   }
 
   if (loading) {
     return (
       <div style={{ maxWidth: '720px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
         <Skeleton style={{ height: '40px', width: '260px' }} />
+        <Skeleton style={{ height: '200px' }} />
         <Skeleton style={{ height: '200px' }} />
       </div>
     );
@@ -85,10 +100,10 @@ export default function Settings() {
       <div className="animate-fade-in" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
           <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.025em' }}>
-            General Settings
+            Settings
           </h1>
           <p style={{ fontSize: '14px', color: '#475569', marginTop: '6px' }}>
-            Configure trading mode, instrument, paper balance, and bot runtime behavior.
+            Configure trading mode, instrument, balance, and live-tunable strategy parameters.
           </p>
         </div>
         <div className="animate-fade-in" style={{ display: 'flex', gap: '10px', animationDelay: '0.15s' }}>
@@ -120,20 +135,14 @@ export default function Settings() {
           <CardContent>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
               <InputField label="Trading Mode" hint="Paper mode is currently the supported execution mode" accentColor="#3b82f6">
-                <Select
-                  value={tradingMode}
-                  onChange={e => setTradingMode(e.target.value)}
-                >
+                <Select value={tradingMode} onChange={e => setTradingMode(e.target.value)}>
                   <option value="paper">Paper</option>
                   <option value="live">Live (preview)</option>
                 </Select>
               </InputField>
 
               <InputField label="Primary Instrument" hint="Used for chart display; bot scans all configured coins" accentColor="#3b82f6">
-                <Select
-                  value={instrument}
-                  onChange={e => setInstrument(e.target.value)}
-                >
+                <Select value={instrument} onChange={e => setInstrument(e.target.value)}>
                   <option value="BTC">Bitcoin (BTC)</option>
                   <option value="ETH">Ethereum (ETH)</option>
                   <option value="SOL">Solana (SOL)</option>
@@ -146,7 +155,8 @@ export default function Settings() {
                   <option value="ADA">Cardano (ADA)</option>
                 </Select>
               </InputField>
-              <InputField label="Paper Trading Balance ($)" hint="Starting balance for paper trading" accentColor="#3b82f6">
+
+              <InputField label="Paper Trading Balance ($)" hint="Current paper balance tracked by the bot" accentColor="#3b82f6">
                 <Input
                   type="number"
                   value={balance}
@@ -154,7 +164,7 @@ export default function Settings() {
                 />
               </InputField>
 
-              <InputField label="Force Market Open" hint="Useful for testing bot cycles when exchange is closed" accentColor="#f59e0b">
+              <InputField label="Force Market Open" hint="Force the bot to trade regardless of market hours" accentColor="#f59e0b">
                 <Select
                   value={forceMarketOpen ? 'true' : 'false'}
                   onChange={e => setForceMarketOpen(e.target.value === 'true')}
@@ -167,8 +177,99 @@ export default function Settings() {
           </CardContent>
         </Card>
 
+        {/* Strategy Parameters */}
+        <Card hover={false} className="animate-fade-in" style={{ animationDelay: '0.13s' }}>
+          <CardHeader>
+            <div>
+              <CardTitle icon={Target} iconColor="#10b981">
+                Strategy Parameters
+              </CardTitle>
+              <CardDescription>
+                Live-tunable — changes take effect on the next scan cycle without restarting the bot
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <InputField
+                label="Min Confidence (%)"
+                hint="Signals below this threshold are rejected (default 50)"
+                accentColor="#10b981"
+              >
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={minConfidence}
+                  onChange={e => setMinConfidence(e.target.value)}
+                />
+              </InputField>
+
+              <InputField
+                label="Risk per Trade (%)"
+                hint="% of balance to risk on each trade (default 1.0)"
+                accentColor="#10b981"
+              >
+                <Input
+                  type="number"
+                  min="0.1"
+                  max="10"
+                  step="0.1"
+                  value={riskPct}
+                  onChange={e => setRiskPct(e.target.value)}
+                />
+              </InputField>
+
+              <InputField
+                label="Max Open Trades"
+                hint="Maximum simultaneous open positions (default 3)"
+                accentColor="#10b981"
+              >
+                <Input
+                  type="number"
+                  min="1"
+                  max="20"
+                  step="1"
+                  value={maxOpenTrades}
+                  onChange={e => setMaxOpenTrades(e.target.value)}
+                />
+              </InputField>
+
+              <InputField
+                label="Min 1h Slope (%)"
+                hint="Minimum 1h trend slope to use 15m execution TF (default 0.5)"
+                accentColor="#10b981"
+              >
+                <Input
+                  type="number"
+                  min="0"
+                  max="5"
+                  step="0.1"
+                  value={minSlopePct}
+                  onChange={e => setMinSlopePct(e.target.value)}
+                />
+              </InputField>
+            </div>
+
+            <div style={{
+              marginTop: '16px',
+              padding: '12px 16px',
+              borderRadius: '10px',
+              background: 'rgba(16, 185, 129, 0.04)',
+              border: '1px solid rgba(16, 185, 129, 0.12)',
+              fontSize: '12px',
+              color: '#64748b',
+              lineHeight: 1.6,
+            }}>
+              <strong style={{ color: '#10b981' }}>Live reload:</strong> These values are written to the database and read by the scanner on every cycle.
+              No bot restart required — the next scan will use the updated values.
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Bot Info */}
-        <Card hover={false} className="animate-fade-in" style={{ animationDelay: '0.15s' }}>
+        <Card hover={false} className="animate-fade-in" style={{ animationDelay: '0.17s' }}>
           <CardHeader>
             <div>
               <CardTitle icon={Bot} iconColor="#a78bfa">
@@ -233,28 +334,6 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
-
-        {/* Info Banner */}
-        <div
-          className="animate-fade-in"
-          style={{
-            animationDelay: '0.2s',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            padding: '16px 20px',
-            borderRadius: '14px',
-            background: 'rgba(59, 130, 246, 0.04)',
-            border: '1px solid rgba(59, 130, 246, 0.08)',
-          }}
-        >
-          <Info style={{ width: '16px', height: '16px', color: '#3b82f6', flexShrink: 0 }} />
-          <p style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>
-            Strategy parameters have moved to the{' '}
-            <a href="/strategy" style={{ color: '#3b82f6', fontWeight: 600, textDecoration: 'none' }}>Strategy</a> page,
-            where you can manage and configure individual strategies.
-          </p>
-        </div>
       </div>
     </div>
   );
