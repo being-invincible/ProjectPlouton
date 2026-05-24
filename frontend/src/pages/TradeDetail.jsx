@@ -12,6 +12,45 @@ import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import FibChart from '../components/FibChart';
 
+function Arrow() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', padding: '0 6px', color: '#1e293b', flexShrink: 0 }}>
+      →
+    </div>
+  );
+}
+
+function PriceLevel({ label, price, sublabel, color, bg, border, tag, tagColor, dimmed }) {
+  return (
+    <div style={{
+      flex: 1, minWidth: 0,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+      padding: '14px 10px', borderRadius: 10,
+      background: bg, border: `1px solid ${border}`,
+      opacity: dimmed ? 0.7 : 1,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color, textAlign: 'center', wordBreak: 'break-all' }}>
+        {price != null ? formatCurrency(price) : '—'}
+      </div>
+      {sublabel && (
+        <div style={{ fontSize: 10, color: '#475569', textAlign: 'center', lineHeight: 1.3 }}>
+          {sublabel}
+        </div>
+      )}
+      {tag && (
+        <span style={{
+          fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 4,
+          background: `${tagColor}22`, color: tagColor,
+          letterSpacing: '0.1em', textTransform: 'uppercase',
+        }}>{tag}</span>
+      )}
+    </div>
+  );
+}
+
 function InfoRow({ label, value, icon: Icon, iconColor, mono = true }) {
   return (
     <div style={{
@@ -140,6 +179,29 @@ export default function TradeDetail() {
     ? (Math.abs(entry - liq) / entry * 100).toFixed(1)
     : null;
 
+  // Whether SL was moved to breakeven (sl ≈ entry)
+  const isBreakeven = sl > 0 && entry > 0 && Math.abs(entry - sl) / entry < 0.0005;
+
+  // Determine what triggered the exit
+  const exitEvent = events.find(e => ['TP1_PARTIAL', 'TP2_HIT', 'SL_HIT'].includes(e.event_type));
+  const r = (trade.exit_reason || '').toUpperCase();
+  const exitLabel = exitEvent?.event_type === 'TP2_HIT' ? 'TP2 Hit'
+    : exitEvent?.event_type === 'TP1_PARTIAL' ? 'TP1 Hit'
+    : exitEvent?.event_type === 'SL_HIT' && isBreakeven ? 'Breakeven Exit'
+    : exitEvent?.event_type === 'SL_HIT' ? 'Stopped Out'
+    : r.includes('TP2') ? 'TP2 Hit'
+    : r.includes('TP1') ? 'TP1 Hit'
+    : (r.includes('SL') || r.includes('STOP')) && isBreakeven ? 'Breakeven Exit'
+    : r.includes('SL') || r.includes('STOP') ? 'Stopped Out'
+    : trade.exit_reason || (isClosed ? 'Closed' : null);
+
+  // Price distance helper
+  function pct(from, to) {
+    if (!from || !to) return null;
+    const v = ((to - from) / from * 100);
+    return `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Header */}
@@ -166,6 +228,108 @@ export default function TradeDetail() {
           </Badge>
         </div>
       </div>
+
+      {/* ── Price Levels Card ── */}
+      <Card>
+        <CardContent style={{ padding: '20px 24px' }}>
+          <div style={{ display: 'flex', alignItems: 'stretch', gap: 0 }}>
+
+            {/* Entry */}
+            <PriceLevel
+              label="Entry"
+              price={entry}
+              sublabel={formatDateTime(trade.timestamp)}
+              color={direction === 'LONG' ? '#10b981' : '#ef4444'}
+              bg={direction === 'LONG' ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)'}
+              border={direction === 'LONG' ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}
+              tag={direction}
+              tagColor={direction === 'LONG' ? '#10b981' : '#ef4444'}
+            />
+
+            <Arrow />
+
+            {/* SL */}
+            <PriceLevel
+              label={isBreakeven ? 'Stop Loss' : 'Stop Loss'}
+              price={isBreakeven ? null : sl}
+              sublabel={isBreakeven ? 'moved to BE' : pct(entry, sl)}
+              color={isBreakeven ? '#60a5fa' : '#ef4444'}
+              bg={isBreakeven ? 'rgba(96,165,250,0.05)' : 'rgba(239,68,68,0.05)'}
+              border={isBreakeven ? 'rgba(96,165,250,0.15)' : 'rgba(239,68,68,0.15)'}
+              tag={isBreakeven ? 'BE' : null}
+              tagColor="#60a5fa"
+              dimmed
+            />
+
+            <Arrow />
+
+            {/* TP1 */}
+            {tp1 && (
+              <>
+                <PriceLevel
+                  label="TP1"
+                  price={tp1}
+                  sublabel={pct(entry, tp1)}
+                  color="#10b981"
+                  bg={exitPrice && Math.abs(exitPrice - tp1) / tp1 < 0.002 ? 'rgba(16,185,129,0.12)' : 'rgba(16,185,129,0.05)'}
+                  border={exitPrice && Math.abs(exitPrice - tp1) / tp1 < 0.002 ? 'rgba(16,185,129,0.35)' : 'rgba(16,185,129,0.12)'}
+                  tag={exitPrice && Math.abs(exitPrice - tp1) / tp1 < 0.002 ? 'EXIT' : null}
+                  tagColor="#10b981"
+                />
+                <Arrow />
+              </>
+            )}
+
+            {/* TP2 */}
+            {tp2 && (
+              <PriceLevel
+                label="TP2"
+                price={tp2}
+                sublabel={pct(entry, tp2)}
+                color="#10b981"
+                bg={exitPrice && Math.abs(exitPrice - tp2) / tp2 < 0.002 ? 'rgba(16,185,129,0.12)' : 'rgba(16,185,129,0.05)'}
+                border={exitPrice && Math.abs(exitPrice - tp2) / tp2 < 0.002 ? 'rgba(16,185,129,0.35)' : 'rgba(16,185,129,0.12)'}
+                tag={exitPrice && Math.abs(exitPrice - tp2) / tp2 < 0.002 ? 'EXIT' : null}
+                tagColor="#10b981"
+              />
+            )}
+
+            {/* Actual exit if it doesn't match TP1/TP2 exactly */}
+            {exitPrice && !(!tp1 && !tp2) && !(tp1 && Math.abs(exitPrice - tp1) / tp1 < 0.002) && !(tp2 && Math.abs(exitPrice - tp2) / tp2 < 0.002) && (
+              <>
+                <Arrow />
+                <PriceLevel
+                  label="Exit"
+                  price={exitPrice}
+                  sublabel={exitLabel}
+                  color={isWin ? '#10b981' : '#ef4444'}
+                  bg={isWin ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)'}
+                  border={isWin ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}
+                  tag="EXIT"
+                  tagColor={isWin ? '#10b981' : '#ef4444'}
+                />
+              </>
+            )}
+
+            {/* Open — show current placeholder */}
+            {!isClosed && (
+              <>
+                <Arrow />
+                <PriceLevel
+                  label="Current"
+                  price={null}
+                  sublabel="live"
+                  color="#3b82f6"
+                  bg="rgba(59,130,246,0.05)"
+                  border="rgba(59,130,246,0.15)"
+                  tag="OPEN"
+                  tagColor="#3b82f6"
+                />
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* ── Interactive TradingView-style Fibonacci chart ── */}
       <Card>
@@ -199,8 +363,15 @@ export default function TradeDetail() {
               ) : (
                 <PnlRow label="Unrealised P&L" value="— (open)" color="blue" />
               )}
+              <InfoRow label="Entry price" value={formatCurrency(entry)} />
               <InfoRow label="Exit price" value={exitPrice ? formatCurrency(exitPrice) : '—'} />
-              <InfoRow label="Exit reason" value={trade.exit_reason || '—'} mono={false} />
+              <InfoRow
+                label="Exit reason"
+                value={<span style={{ color: exitLabel?.includes('TP') ? '#10b981' : exitLabel?.includes('Breakeven') ? '#60a5fa' : exitLabel?.includes('Stopped') ? '#ef4444' : '#94a3b8' }}>
+                  {exitLabel || '—'}
+                </span>}
+                mono={false}
+              />
               <InfoRow label="Confidence" value={`${Number(trade.confidence || 0).toFixed(0)}%`} />
             </div>
           </CardContent>

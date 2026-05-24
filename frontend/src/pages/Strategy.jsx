@@ -71,6 +71,7 @@ export default function Strategy() {
   async function handleSaveParams(strategyId) {
     setSaving(true);
     try {
+      await api.updateStrategyParams(editParams);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       await fetchStrategies();

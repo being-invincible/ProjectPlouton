@@ -34,17 +34,21 @@ class PositionSizer:
         direction: str,
         max_leverage_for_coin: int,
         funding_rate_hr: float = 0.0,
+        risk_per_trade_pct: float | None = None,
     ) -> PositionInfo:
         stop_distance = abs(entry - stop_loss)
         if stop_distance <= 0:
             raise ValueError("Stop distance cannot be zero")
 
-        risk_amount = balance * self.risk_per_trade_pct
+        effective_risk_pct = risk_per_trade_pct if risk_per_trade_pct is not None else self.risk_per_trade_pct
+        risk_amount = balance * effective_risk_pct
         quantity = risk_amount / stop_distance
         notional = quantity * entry
 
-        # Suggested leverage = ceil(notional / balance), capped per coin
-        raw_leverage = max(1, math.ceil(notional / balance))
+        # Target leverage keeps initial_margin ≈ risk_amount (not full notional).
+        # ceil(notional/balance) gave 1x when notional < balance, forcing margin = notional
+        # and burning most of the account on a single trade.
+        raw_leverage = max(1, math.ceil(notional / risk_amount))
         suggested_leverage = min(raw_leverage, max_leverage_for_coin)
 
         initial_margin = notional / suggested_leverage

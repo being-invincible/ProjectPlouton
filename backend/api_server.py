@@ -17,6 +17,7 @@ from fastapi import FastAPI, Query, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -105,9 +106,19 @@ def _serialize(obj):
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if pd.isna(obj):
-        return None
+        return [_serialize(x) for x in obj.tolist()]
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    # pd.isna on a non-scalar (list/array) returns an array → ambiguous in `if`.
+    # Only null-check true scalars.
+    if np.isscalar(obj) or obj is None:
+        try:
+            if pd.isna(obj):
+                return None
+        except (TypeError, ValueError):
+            pass
     return obj
 
 
@@ -142,6 +153,11 @@ class SettingsPatch(BaseModel):
     balance: float | None = None
     trading_mode: str | None = None
     force_market_open: bool | None = None
+    # Strategy params — saved to strategy_configs.params, read live by scanner
+    min_confidence_pct: float | None = None
+    risk_per_trade_pct: float | None = None
+    max_open_trades: int | None = None
+    min_slope_pct: float | None = None
 
 
 class BacktestTradePayload(BaseModel):
@@ -264,41 +280,64 @@ async def get_runtime():
 
 @app.get("/api/settings")
 async def get_settings_state():
+    from config import settings as bot_settings
     store = get_store()
     state = store.get_bot_state() or {}
+    strategy_params = store.get_active_strategy_params()
     return _clean({
         "instrument": state.get("instrument", "BTC"),
         "balance": state.get("balance", 500.0),
         "trading_mode": state.get("trading_mode", "paper"),
         "force_market_open": state.get("force_market_open", False),
+        # Strategy params — live-tunable without restart
+        "min_confidence_pct": float(strategy_params.get("min_confidence_pct", bot_settings.min_confidence_pct)),
+        "risk_per_trade_pct": float(strategy_params.get("risk_per_trade_pct", bot_settings.risk_per_trade_pct * 100)),
+        "max_open_trades": int(strategy_params.get("max_open_trades", bot_settings.max_open_trades)),
+        "min_slope_pct": float(strategy_params.get("min_slope_pct", 0.5)),
     })
 
 
 @app.patch("/api/settings")
 async def patch_settings(payload: SettingsPatch):
+    from config import settings as bot_settings
     store = get_store()
-    updates = {}
+    bot_updates = {}
+    strategy_updates = {}
 
     if payload.instrument is not None:
-        updates["instrument"] = payload.instrument
+        bot_updates["instrument"] = payload.instrument
 
     if payload.balance is not None:
-        updates["balance"] = float(payload.balance)
+        bot_updates["balance"] = float(payload.balance)
 
     if payload.trading_mode is not None:
         mode = payload.trading_mode.lower().strip()
         if mode not in {"paper", "live"}:
             return JSONResponse(status_code=400, content={"error": "trading_mode must be 'paper' or 'live'"})
-        updates["trading_mode"] = mode
+        bot_updates["trading_mode"] = mode
 
     if payload.force_market_open is not None:
-        updates["force_market_open"] = bool(payload.force_market_open)
+        bot_updates["force_market_open"] = bool(payload.force_market_open)
 
-    if not updates:
+    # Strategy params — written to strategy_configs.params, read live by scanner
+    if payload.min_confidence_pct is not None:
+        strategy_updates["min_confidence_pct"] = float(payload.min_confidence_pct)
+    if payload.risk_per_trade_pct is not None:
+        strategy_updates["risk_per_trade_pct"] = float(payload.risk_per_trade_pct)
+    if payload.max_open_trades is not None:
+        strategy_updates["max_open_trades"] = int(payload.max_open_trades)
+    if payload.min_slope_pct is not None:
+        strategy_updates["min_slope_pct"] = float(payload.min_slope_pct)
+
+    if not bot_updates and not strategy_updates:
         return {"ok": True, "updated": 0}
 
-    store.update_bot_state(updates)
-    return {"ok": True, "updated": len(updates)}
+    if bot_updates:
+        store.update_bot_state(bot_updates)
+    if strategy_updates:
+        store.update_active_strategy_params(strategy_updates)
+
+    return {"ok": True, "updated": len(bot_updates) + len(strategy_updates)}
 
 
 # ── Candles ──────────────────────────────────────────────────────
@@ -317,11 +356,29 @@ async def get_candles(
     )
     if df.empty:
         return []
-    # Convert to list of dicts with standard column names
     df = df.reset_index()
     df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
     records = df.to_dict("records")
     return _clean(records)
+
+
+@app.get("/api/live_candles")
+async def get_live_candles(
+    instrument: str = "BTC",
+    timeframe: str = "4h",
+    limit: int = 300,
+):
+    """Fetch candles live from Hyperliquid — always current, bypasses DuckDB cache."""
+    from backend.data.hyperliquid_fetcher import HyperliquidFetcher
+    try:
+        fetcher = HyperliquidFetcher()
+        df = fetcher.fetch_ohlcv(instrument, timeframe=timeframe, limit=limit)
+        df = df.reset_index()
+        df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+        records = df.to_dict("records")
+        return _clean(records)
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
 
 
 # ── Trades ───────────────────────────────────────────────────────
@@ -396,6 +453,30 @@ async def get_trade(trade_id: str):
     trade["chart_initial_png"] = has_initial
     trade["chart_final_png"] = has_final
     return _clean(trade)
+
+
+class TradePatch(BaseModel):
+    pnl: float | None = None
+    status: str | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None
+
+
+@app.patch("/api/trades/{trade_id}")
+async def patch_trade(trade_id: str, payload: TradePatch):
+    """Correct a closed trade's stored fields (e.g. pnl after TP1+TP2 fix)."""
+    store = get_store()
+    trade = store.get_trade(trade_id)
+    if trade is None:
+        return JSONResponse(status_code=404, content={"error": "Trade not found"})
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        return {"ok": True, "updated": 0}
+    try:
+        store.update_trade(trade_id, updates)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True, "updated": list(updates.keys())}
 
 
 @app.get("/api/trades/{trade_id}/events")
@@ -478,16 +559,23 @@ async def get_monitor():
     store = get_store()
     coins = bot_settings.coins
 
+    # The bot scans on its execution timeframe (4h by default), not 5m.
+    exec_tf = bot_settings.execution_tf_default
+    # The heartbeat updates every cycle, so it's the truthful "last scan" time
+    # (the newest candle timestamp can be up to one TF-period old).
+    state = store.get_bot_state() or {}
+    heartbeat = state.get("last_heartbeat") or state.get("last_updated")
+
     result = []
     for coin in coins:
-        # Last 5m candle = proxy for last scan time
+        # Last execution-TF candle = proxy for last scan time
         last_candle = store.conn.execute(
-            "SELECT MAX(timestamp) FROM candles WHERE instrument = ? AND timeframe = '5m'",
-            [coin],
+            "SELECT MAX(timestamp) FROM candles WHERE instrument = ? AND timeframe = ?",
+            [coin, exec_tf],
         ).fetchone()
         candle_count = store.conn.execute(
-            "SELECT COUNT(*) FROM candles WHERE instrument = ? AND timeframe = '5m'",
-            [coin],
+            "SELECT COUNT(*) FROM candles WHERE instrument = ? AND timeframe = ?",
+            [coin, exec_tf],
         ).fetchone()[0]
 
         # Latest signal
@@ -503,13 +591,13 @@ async def get_monitor():
 
         # Latest close price
         price_row = store.conn.execute(
-            "SELECT close FROM candles WHERE instrument = ? AND timeframe = '5m' ORDER BY timestamp DESC LIMIT 1",
-            [coin],
+            "SELECT close FROM candles WHERE instrument = ? AND timeframe = ? ORDER BY timestamp DESC LIMIT 1",
+            [coin, exec_tf],
         ).fetchone()
 
         result.append(_clean({
             "coin": coin,
-            "last_scan": last_candle[0] if last_candle else None,
+            "last_scan": heartbeat if candle_count > 0 else (last_candle[0] if last_candle else None),
             "candle_count": candle_count,
             "last_signal_time": sig_row[0] if sig_row else None,
             "last_signal_direction": sig_row[1] if sig_row else None,
@@ -590,6 +678,233 @@ async def generate_trade_chart(trade_id: str):
     except Exception as exc:
         logger.exception("Chart generation failed")
         return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ── Live Fibonacci Analysis ───────────────────────────────────────
+
+@app.get("/api/fib_analysis/{coin}")
+async def get_fib_analysis(coin: str):
+    """
+    Live Golden Pocket Fibonacci analysis for any coin.
+    Returns swing, zone, all retracement levels, and whether price is currently in the zone.
+    """
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from strategy.golden_pocket import GoldenPocketStrategy
+    from strategy.atr import compute_atr
+    from config import settings as bot_settings
+
+    store = get_store()
+    df = store.get_candles(instrument=coin, timeframe="5m", periods=500)
+    if df.empty:
+        return JSONResponse(status_code=404, content={"error": f"No candle data for {coin}"})
+
+    # Column names from get_candles are capitalised (Open/High/Low/Close/Volume)
+    if "Close" not in df.columns and "close" in df.columns:
+        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low",
+                                 "close": "Close", "volume": "Volume"})
+
+    strat = GoldenPocketStrategy()
+    swing = strat.detect_swing(df)
+    if swing is None:
+        return _clean({"coin": coin, "swing": None, "zone": None, "levels": {},
+                        "current_price": float(df["Close"].iloc[-1]), "in_golden_pocket": False})
+
+    rng = swing.high - swing.low
+    direction = swing.direction  # "UP" or "DOWN"
+    zone = strat.golden_pocket_zone(swing.low, swing.high, direction)
+
+    atr_series = compute_atr(df, period=bot_settings.atr_period)
+    atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
+    current_price = float(df["Close"].iloc[-1])
+
+    # Retracement levels — always measured from the dominant swing high/low.
+    # For UP swings (LONG setups): retracement goes from high downward.
+    # For DOWN swings (SHORT setups): bounce goes from low upward.
+    if direction == "UP":
+        levels = {
+            "swing_low":  {"price": swing.low,              "label": "Swing Low (0%)",          "role": "base"},
+            "fib_236":    {"price": swing.high - 0.236*rng, "label": "23.6% Retrace",            "role": "fib"},
+            "fib_382":    {"price": swing.high - 0.382*rng, "label": "38.2% Retrace",            "role": "fib"},
+            "gp_upper":   {"price": swing.high - 0.500*rng, "label": "50% — Golden Pocket Upper","role": "zone"},
+            "gp_lower":   {"price": swing.high - 0.618*rng, "label": "61.8% — Golden Pocket Lower","role":"zone"},
+            "fib_786":    {"price": swing.high - 0.786*rng, "label": "78.6% SL Zone",            "role": "sl"},
+            "swing_high": {"price": swing.high,             "label": "Swing High (100%)",        "role": "base"},
+            "ext_1618":   {"price": swing.high + 0.618*rng, "label": "1.618 Extension (TP2)",    "role": "tp"},
+        }
+    else:
+        levels = {
+            "swing_high": {"price": swing.high,             "label": "Swing High (100%)",        "role": "base"},
+            "fib_236":    {"price": swing.low  + 0.236*rng, "label": "23.6% Bounce",             "role": "fib"},
+            "fib_382":    {"price": swing.low  + 0.382*rng, "label": "38.2% Bounce",             "role": "fib"},
+            "gp_lower":   {"price": swing.low  + 0.500*rng, "label": "50% — Golden Pocket Lower","role": "zone"},
+            "gp_upper":   {"price": swing.low  + 0.618*rng, "label": "61.8% — Golden Pocket Upper","role":"zone"},
+            "fib_786":    {"price": swing.low  + 0.786*rng, "label": "78.6% SL Zone",            "role": "sl"},
+            "swing_low":  {"price": swing.low,              "label": "Swing Low (0%)",            "role": "base"},
+            "ext_1618":   {"price": swing.low  - 0.618*rng, "label": "1.618 Extension (TP2)",    "role": "tp"},
+        }
+
+    in_zone = zone.lower <= current_price <= zone.upper
+    mtf_trend = store.compute_mtf_trend(instrument=coin)
+
+    high_ts = swing.high_idx
+    low_ts  = swing.low_idx
+    return _clean({
+        "coin": coin,
+        "current_price": current_price,
+        "direction": direction,
+        "trend_1h": mtf_trend.get("1h", {}).get("trend"),
+        "slope_1h": mtf_trend.get("1h", {}).get("slope", 0),
+        "in_golden_pocket": in_zone,
+        "swing": {
+            "high": swing.high,
+            "low":  swing.low,
+            "high_ts": high_ts.isoformat() if hasattr(high_ts, "isoformat") else str(high_ts),
+            "low_ts":  low_ts.isoformat()  if hasattr(low_ts,  "isoformat") else str(low_ts),
+            "range": rng,
+        },
+        "zone": {"upper": zone.upper, "lower": zone.lower},
+        "levels": levels,
+        "atr": atr,
+    })
+
+
+# ── Backtest / Manual Trade Entry ────────────────────────────────
+
+class BacktestTradeIn(BaseModel):
+    instrument: str
+    direction: str           # "LONG" or "SHORT"
+    entry_price: float
+    stop_loss: float
+    take_profit: float       # legacy TP / TP2
+    quantity: float
+    timestamp: str           # ISO-8601 entry time
+    status: str = "CLOSED"
+    strategy_name: str = "golden_pocket"
+    asset_class: str = "crypto"
+    trade_type: str = "backtest"
+    # Optional enrichment
+    tp1_price: float | None = None
+    tp2_price: float | None = None
+    tp1_hit: bool | None = None
+    exit_price: float | None = None
+    exit_timestamp: str | None = None
+    exit_reason: str | None = None
+    pnl: float | None = None
+    confidence: float | None = None
+    leverage: float | None = None
+    notional: float | None = None
+    initial_margin: float | None = None
+    swing_high: float | None = None
+    swing_low: float | None = None
+    fib_zone_upper: float | None = None
+    fib_zone_lower: float | None = None
+    fib_level_triggered: float | None = None
+    rr_tp1: float | None = None
+    rr_tp2: float | None = None
+    analysis_notes: str | None = None
+
+
+@app.post("/api/trades")
+async def create_backtest_trade(body: BacktestTradeIn):
+    """
+    Insert a backtest or manual trade record.
+    Generates a UUID, stores all provided fields, and optionally
+    writes trade_events for entry / TP1 / TP2 exits.
+    """
+    import uuid
+    store = get_store()
+
+    trade_id = str(uuid.uuid4())[:16]
+    row = {
+        "id": trade_id,
+        **{k: v for k, v in body.model_dump().items() if v is not None},
+    }
+    store.insert_trade(row)
+
+    # Persist lifecycle events so TradeDetail timeline renders properly
+    events = []
+    events.append({
+        "id": str(uuid.uuid4())[:16],
+        "trade_id": trade_id,
+        "event_type": "entry",
+        "price": body.entry_price,
+        "pnl_partial": None,
+        "timestamp": body.timestamp,
+    })
+
+    if body.tp1_price and body.tp1_hit:
+        sl_dist = abs(body.entry_price - body.stop_loss)
+        qty_half = body.quantity / 2
+        tp1_pnl = qty_half * abs(body.tp1_price - body.entry_price)
+        events.append({
+            "id": str(uuid.uuid4())[:16],
+            "trade_id": trade_id,
+            "event_type": "TP1_hit",
+            "price": body.tp1_price,
+            "pnl_partial": round(tp1_pnl, 4),
+            "timestamp": body.exit_timestamp or body.timestamp,
+        })
+
+    if body.exit_price and body.exit_reason:
+        events.append({
+            "id": str(uuid.uuid4())[:16],
+            "trade_id": trade_id,
+            "event_type": body.exit_reason,
+            "price": body.exit_price,
+            "pnl_partial": body.pnl,
+            "timestamp": body.exit_timestamp or body.timestamp,
+        })
+
+    for ev in events:
+        try:
+            cols = list(ev.keys())
+            vals = [ev[c] for c in cols]
+            store.conn.execute(
+                f"INSERT INTO trade_events ({', '.join(cols)}) VALUES ({', '.join(['?']*len(cols))})",
+                vals,
+            )
+        except Exception as e:
+            logger.warning(f"Could not insert trade_event: {e}")
+
+    return {"id": trade_id, "status": "created", "events_inserted": len(events)}
+
+
+# ── Frontend SPA (serve built React app) ─────────────────────────
+
+_FRONTEND_DIST = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "frontend", "dist",
+)
+
+_STATIC_MIME = {
+    ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+    ".woff2": "font/woff2", ".woff": "font/woff",
+}
+
+if os.path.isdir(_FRONTEND_DIST):
+    # Serve hashed JS/CSS bundles from /assets/
+    app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        """Serve static root files (images, fonts) or index.html for SPA routes."""
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"error": "Not found"})
+        # Check if it's a real file in the dist root (logo, icons, fonts, etc.)
+        candidate = os.path.join(_FRONTEND_DIST, full_path)
+        if os.path.isfile(candidate):
+            ext = os.path.splitext(full_path)[1].lower()
+            mime = _STATIC_MIME.get(ext, "application/octet-stream")
+            return Response(content=open(candidate, "rb").read(), media_type=mime)
+        # Everything else → SPA index
+        index = os.path.join(_FRONTEND_DIST, "index.html")
+        return Response(
+            content=open(index, "rb").read(),
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
 
 if __name__ == "__main__":

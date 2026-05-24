@@ -37,8 +37,8 @@ class HyperliquidFetcher:
         return df
 
     def fetch_multi_timeframe(self, coin: str) -> Dict[str, pd.DataFrame]:
-        """Fetch the three analysis TFs at maximum useful depth."""
-        depths = {"5m": 1000, "15m": 1000, "1h": 1000}
+        """Fetch analysis TFs. 4h is the execution TF; 1h confirms; 1d sets macro trend."""
+        depths = {"1d": 500, "4h": 1000, "1h": 1000}
         out: Dict[str, pd.DataFrame] = {}
         for tf, limit in depths.items():
             try:

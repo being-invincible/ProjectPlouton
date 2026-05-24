@@ -1,45 +1,21 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { createChart, CandlestickSeries, HistogramSeries } from 'lightweight-charts';
 import {
-  TrendingUp, TrendingDown, BarChart3, Activity, RefreshCw, Zap, Clock,
+  TrendingUp, TrendingDown, BarChart3, Activity, Zap, Clock,
 } from 'lucide-react';
 import api from '../lib/api';
 import { formatCurrency } from '../lib/utils';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
+import TradingViewChart from '../components/TradingViewChart';
 
 const TIMEFRAMES = [
-  { value: '5m', label: '5min' },
   { value: '15m', label: '15min' },
-  { value: '30m', label: '30min' },
   { value: '1h', label: '1H' },
+  { value: '4h', label: '4H' },
+  { value: '1d', label: '1D' },
 ];
-
-// 30m is not stored by the bot — resample from 5m candles client-side
-function resampleCandles(candles, targetMinutes) {
-  const bucketMs = targetMinutes * 60 * 1000;
-  const groups = new Map();
-  for (const c of candles) {
-    const ts = new Date(c.timestamp).getTime();
-    const bucket = Math.floor(ts / bucketMs) * bucketMs;
-    if (!groups.has(bucket)) {
-      groups.set(bucket, {
-        timestamp: new Date(bucket).toISOString(),
-        open: c.open, high: c.high, low: c.low, close: c.close,
-        volume: c.volume || 0,
-      });
-    } else {
-      const g = groups.get(bucket);
-      g.high = Math.max(g.high, c.high);
-      g.low = Math.min(g.low, c.low);
-      g.close = c.close;
-      g.volume += (c.volume || 0);
-    }
-  }
-  return [...groups.values()].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-}
 
 const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'SUI', 'TAO', 'LINK', 'HYPE', 'ADA'];
 
@@ -59,12 +35,10 @@ function timeSince(isoStr) {
 
 export default function Chart() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const chartContainerRef = useRef(null);
-  const chartRef = useRef(null);
   const [candles, setCandles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [instrument, setInstrument] = useState(searchParams.get('coin') || 'BTC');
-  const [timeframe, setTimeframe] = useState('5m');
+  const [timeframe, setTimeframe] = useState('4h');
   const [mtfTrend, setMtfTrend] = useState(null);
   const [coinMonitor, setCoinMonitor] = useState(null);
 
@@ -83,15 +57,14 @@ export default function Chart() {
   async function fetchCandles() {
     try {
       setLoading(true);
-      // 30m not stored by bot — fetch 5m and resample client-side
-      const apiTf = timeframe === '30m' ? '5m' : timeframe;
+      // Live candles straight from Hyperliquid — always current.
       const [candleData, trend, monitorAll] = await Promise.all([
-        api.getCandles(instrument, apiTf, 5000),
+        api.getLiveCandles(instrument, timeframe, 400),
         api.getMtfTrend(instrument),
         api.getMonitor(),
       ]);
       const raw = Array.isArray(candleData) ? candleData : [];
-      setCandles(timeframe === '30m' ? resampleCandles(raw, 30) : raw);
+      setCandles(raw);
       setMtfTrend(trend);
       if (Array.isArray(monitorAll)) {
         setCoinMonitor(monitorAll.find(c => c.coin === instrument) || null);
@@ -107,70 +80,6 @@ export default function Chart() {
     setInstrument(coin);
     setSearchParams({ coin });
   }
-
-  // Build chart when candles available
-  useEffect(() => {
-    if (!chartContainerRef.current || candles.length === 0) return;
-    if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
-
-    const chart = createChart(chartContainerRef.current, {
-      layout: {
-        background: { color: 'transparent' },
-        textColor: '#64748b',
-        fontFamily: "'Inter', system-ui, sans-serif",
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: 'rgba(255,255,255,0.03)' },
-        horzLines: { color: 'rgba(255,255,255,0.03)' },
-      },
-      crosshair: {
-        vertLine: { color: 'rgba(59, 130, 246, 0.3)', width: 1, style: 2 },
-        horzLine: { color: 'rgba(59, 130, 246, 0.3)', width: 1, style: 2 },
-      },
-      timeScale: { borderColor: 'rgba(255,255,255,0.06)', timeVisible: true, secondsVisible: false },
-      rightPriceScale: { borderColor: 'rgba(255,255,255,0.06)' },
-      handleScroll: { vertTouchDrag: false },
-    });
-
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#10b981', downColor: '#ef4444',
-      borderUpColor: '#10b981', borderDownColor: '#ef4444',
-      wickUpColor: '#10b98199', wickDownColor: '#ef444499',
-    });
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' }, priceScaleId: 'volume',
-    });
-    chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-
-    candleSeries.setData(candles.map(c => ({
-      time: Math.floor(new Date(c.timestamp).getTime() / 1000),
-      open: c.open, high: c.high, low: c.low, close: c.close,
-    })));
-    volumeSeries.setData(candles.map(c => ({
-      time: Math.floor(new Date(c.timestamp).getTime() / 1000),
-      value: c.volume || 0,
-      color: c.close >= c.open ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
-    })));
-
-    // Show last 120 candles with ~50 empty bars on the right so the current
-    // bar sits at ~70% of the chart width, leaving breathing room like TradingView.
-    const totalBars = candles.length;
-    const visibleBars = 120;
-    const rightPad = 50;
-    chart.timeScale().setVisibleLogicalRange({
-      from: Math.max(0, totalBars - visibleBars),
-      to: totalBars + rightPad,
-    });
-
-    chartRef.current = chart;
-
-    const handleResize = () => {
-      if (chartContainerRef.current) chart.applyOptions({ width: chartContainerRef.current.clientWidth });
-    };
-    window.addEventListener('resize', handleResize);
-    return () => { window.removeEventListener('resize', handleResize); chart.remove(); chartRef.current = null; };
-  }, [candles]);
 
   const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
   const firstCandle = candles.length > 0 ? candles[0] : null;
@@ -246,27 +155,8 @@ export default function Chart() {
             ))}
           </div>
         </CardHeader>
-        <CardContent style={{ padding: 0 }}>
-          {loading && candles.length === 0 ? (
-            <div style={{ height: '440px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ textAlign: 'center', color: '#475569' }}>
-                <RefreshCw style={{ width: '22px', height: '22px', margin: '0 auto 10px', animation: 'spin 1s linear infinite' }} />
-                <p style={{ fontSize: '13px' }}>Loading…</p>
-              </div>
-            </div>
-          ) : candles.length === 0 ? (
-            <div style={{ height: '440px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ width: '52px', height: '52px', borderRadius: '14px', background: `rgba(${parseInt(coinColor.slice(1,3),16)},${parseInt(coinColor.slice(3,5),16)},${parseInt(coinColor.slice(5,7),16)},0.08)`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
-                  <Activity style={{ width: '22px', height: '22px', color: coinColor }} />
-                </div>
-                <p style={{ fontSize: '14px', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>No data for {instrument}</p>
-                <p style={{ fontSize: '12px', color: '#475569' }}>Bot fetches candle data on each scan cycle.</p>
-              </div>
-            </div>
-          ) : (
-            <div ref={chartContainerRef} style={{ height: '440px', padding: '0 8px 8px' }} />
-          )}
+        <CardContent style={{ padding: '0 8px 8px' }}>
+          <TradingViewChart coin={instrument} timeframe={timeframe} height={700} />
         </CardContent>
       </Card>
 
@@ -322,7 +212,7 @@ export default function Chart() {
             MTF Trend
           </span>
           <div style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.06)' }} />
-          {['1h', '15m', '5m'].map(tf => {
+          {['1d', '4h', '1h'].map(tf => {
             const t = mtfTrend[tf] || {};
             return (
               <div key={tf} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -331,7 +221,7 @@ export default function Chart() {
                   {t.trend || '?'}
                 </Badge>
                 <span style={{ fontSize: '10px', color: '#475569', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {t.slope != null ? `${t.slope > 0 ? '+' : ''}${t.slope}%` : ''}
+                  {t.slope != null ? `${t.slope > 0 ? '+' : ''}${(t.slope * 100).toFixed(2)}%` : ''}
                 </span>
               </div>
             );

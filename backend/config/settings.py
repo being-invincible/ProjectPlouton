@@ -21,15 +21,18 @@ class Settings(BaseSettings):
 
     # Paper trading
     paper_balance: float = 500.0
-    risk_per_trade_pct: float = 0.03
-    max_open_trades: int = 3
+    risk_per_trade_pct: float = 0.01
+    max_open_trades: int = 6
     daily_loss_limit_pct: float = 0.15
 
+    # Strategy selection: "golden_pocket" | "smc"
+    strategy_name: str = "golden_pocket"
+
     # Strategy
-    min_confidence_pct: float = 60.0
-    execution_tf_default: str = "5m"
-    confirmation_tf: str = "15m"
-    trend_tf: str = "1h"
+    min_confidence_pct: float = 40.0
+    execution_tf_default: str = "4h"
+    confirmation_tf: str = "1h"
+    trend_tf: str = "1d"
     atr_period: int = 14
     atr_sl_multiplier: float = 1.5
     min_slope_pct: float = 0.002

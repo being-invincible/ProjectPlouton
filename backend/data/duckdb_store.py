@@ -43,11 +43,28 @@ class DuckDBStore:
 
         self.db_path = db_path
         self._lock = threading.RLock()
-        self.conn = duckdb.connect(db_path, read_only=read_only)
+        # DuckDB connection objects are NOT thread-safe. The bot loop and the
+        # FastAPI server share one DuckDBStore (see run.py `set_store`), so a
+        # single shared connection means concurrent execute() calls from the
+        # bot thread and the dashboard's polling threads clobber each other's
+        # results (fetchone()->None, .description->floats) and eventually trigger
+        # a C++ null-deref crash. Hand each thread its own cursor on the same
+        # database instead — the documented DuckDB multithreading pattern.
+        self._base_conn = duckdb.connect(db_path, read_only=read_only)
+        self._local = threading.local()
         if not read_only:
             self._create_tables()
             self._migrate_v2()
         logger.info(f"DuckDB store opened: {db_path}")
+
+    @property
+    def conn(self):
+        """Per-thread DuckDB cursor on the shared database (thread-safe access)."""
+        cursor = getattr(self._local, "cursor", None)
+        if cursor is None:
+            cursor = self._base_conn.cursor()
+            self._local.cursor = cursor
+        return cursor
 
     def _create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -374,16 +391,16 @@ class DuckDBStore:
 
         Returns:
             {
+                "1d":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
+                "4h":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
                 "1h":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
-                "15m": {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
-                "5m":  {"trend": "UP"|"DOWN", "slope": float, "vma": float, "candles": int},
-                "stacked": True|False,       # All TFs agree?
-                "direction": "UP"|"DOWN"|"MIXED",  # Consensus direction
+                "stacked": True|False,       # 1d and 1h agree?
+                "direction": "UP"|"DOWN"|"MIXED",
             }
         """
         result = {}
 
-        for tf in ["1h", "15m", "5m"]:
+        for tf in ["1d", "4h", "1h"]:
             try:
                 row = self.conn.execute("""
                     WITH vma_calc AS (
@@ -423,12 +440,17 @@ class DuckDBStore:
                     current_price = row[2]
                     total_candles = row[3]
 
-                    slope = (current_vma - prev_vma) / prev_vma * 100 if prev_vma != 0 else 0
+                    # Slope is a FRACTION (e.g. 0.0064 = +0.64% VMA change over 10
+                    # periods). All consumers — golden_pocket.min_slope_pct,
+                    # confidence_scorer._slope_strength, the coin_scanner exec-TF
+                    # switch, and the Discord summary's `slope*100` — expect a
+                    # fraction. Do NOT multiply by 100 here.
+                    slope = (current_vma - prev_vma) / prev_vma if prev_vma != 0 else 0
                     trend = "UP" if slope > 0 else "DOWN"
 
                     result[tf] = {
                         "trend": trend,
-                        "slope": round(slope, 4),
+                        "slope": round(slope, 6),
                         "vma": round(current_vma, 2),
                         "price": round(current_price, 2),
                         "candles": total_candles,
@@ -448,11 +470,17 @@ class DuckDBStore:
                     "price": 0, "candles": 0,
                 }
 
-        # Determine stack consensus
-        trends = [v["trend"] for v in result.values() if v["trend"] != "UNKNOWN"]
-        if len(trends) >= 2 and len(set(trends)) == 1:
+        # Stack consensus: 1d (macro) + 1h (intermediate) must agree.
+        # 4h is the execution TF where the pullback forms — it retraces against
+        # the macro trend by definition, so it is excluded from consensus.
+        anchor_trends = [
+            result[tf]["trend"]
+            for tf in ("1d", "1h")
+            if result.get(tf, {}).get("trend") not in (None, "UNKNOWN")
+        ]
+        if len(anchor_trends) == 2 and len(set(anchor_trends)) == 1:
             stacked = True
-            direction = trends[0]
+            direction = anchor_trends[0]
         else:
             stacked = False
             direction = "MIXED"
@@ -737,6 +765,20 @@ class DuckDBStore:
             return []
         return df.to_dict("records")
 
+    def recent_sl_hit(self, instrument: str, within_hours: float = 2.0) -> bool:
+        """Return True if this coin had an SL exit within the last `within_hours`."""
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) FROM trades
+            WHERE instrument = ?
+              AND status = 'CLOSED'
+              AND (exit_reason ILIKE '%SL%' OR exit_reason ILIKE '%STOP%')
+              AND exit_timestamp >= now() - INTERVAL (? || ' hours')
+            """,
+            [instrument, str(within_hours)],
+        ).fetchone()
+        return bool(row and row[0] > 0)
+
     def list_all_trades(self) -> list[dict]:
         """Return all trades as list of dicts."""
         df = self.conn.execute("SELECT * FROM trades ORDER BY timestamp").fetchdf()
@@ -900,6 +942,29 @@ class DuckDBStore:
             row["params"] = json.loads(row["params"])
         return row
 
+    def get_active_strategy_params(self) -> dict:
+        """Return the params dict of the active strategy config (live-tunable settings)."""
+        import json
+        row = self.conn.execute(
+            "SELECT params FROM strategy_configs WHERE is_active = TRUE ORDER BY id LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            return json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+        except Exception:
+            return {}
+
+    def update_active_strategy_params(self, updates: dict) -> None:
+        """Merge updates into the active strategy params JSON."""
+        import json
+        current = self.get_active_strategy_params()
+        current.update(updates)
+        self.conn.execute(
+            "UPDATE strategy_configs SET params = ? WHERE is_active = TRUE",
+            [json.dumps(current)],
+        )
+
     def get_strategy_configs(self) -> list[dict]:
         """Get all strategy configs."""
         df = self.conn.execute(
@@ -944,8 +1009,9 @@ class DuckDBStore:
 
     def close(self) -> None:
         """Close the DuckDB connection."""
-        if self.conn:
-            self.conn.close()
+        if getattr(self, "_base_conn", None) is not None:
+            self._base_conn.close()
+            self._base_conn = None
             logger.info("DuckDB store closed")
 
     def __enter__(self):

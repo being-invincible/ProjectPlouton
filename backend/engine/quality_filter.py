@@ -17,10 +17,14 @@ class QualityFilter:
         balance: float,
         confidence: float,
         position_margin: float = 0.0,
+        min_confidence_override: float | None = None,
+        max_open_trades_override: int | None = None,
     ) -> bool:
-        if confidence < self.min_confidence_pct:
+        min_conf  = min_confidence_override  if min_confidence_override  is not None else self.min_confidence_pct
+        max_open  = max_open_trades_override if max_open_trades_override is not None else self.max_open_trades
+        if confidence < min_conf:
             return False
-        if open_trades_count >= self.max_open_trades:
+        if open_trades_count >= max_open:
             return False
         if balance > 0 and (daily_pnl / balance) <= -self.daily_loss_limit_pct:
             return False

@@ -6,12 +6,13 @@ import pandas as pd
 class ConfidenceScorer:
     """Returns 0-95 confidence score for a Signal given context."""
 
-    W_MTF       = 25
-    W_SLOPE     = 20
-    W_PATTERN   = 20
-    W_VOLUME    = 15
+    W_MTF       = 20
+    W_SLOPE     = 18
+    W_PATTERN   = 18
+    W_VOLUME    = 14
     W_EMA       = 10
     W_ATR_SANE  = 10
+    W_RSI       = 10   # RSI confirmation from QuantInsti best practices
 
     def score(self, signal, df: pd.DataFrame, mtf_trend: dict) -> float:
         """Aggregate weighted heuristics into a single 0-95 score."""
@@ -22,31 +23,52 @@ class ConfidenceScorer:
         score += self._volume_signal(df) * self.W_VOLUME
         score += self._ema_confluence(df, signal) * self.W_EMA
         score += self._atr_sanity(signal) * self.W_ATR_SANE
+        score += self._rsi_score(signal) * self.W_RSI
+        # GP zone scores slightly higher than 38.2% (deeper retracement = stronger support)
+        if getattr(signal, "fib_zone_name", "GP") == "38.2":
+            score *= 0.96
         return max(0.0, min(95.0, score))
 
     def _mtf_alignment(self, mtf: dict, direction: str) -> float:
         wanted   = "UP"   if direction == "LONG" else "DOWN"
         opposite = "DOWN" if direction == "LONG" else "UP"
-        tf_1h  = mtf.get("1h",  {}).get("trend")
-        tf_15m = mtf.get("15m", {}).get("trend")
-        tf_5m  = mtf.get("5m",  {}).get("trend")
-        # 1h sets the primary trend — must align.
-        if tf_1h != wanted:
-            return 0.0
-        # Classic golden pocket: 1h with us, 15m retracing, 5m bouncing back.
-        if tf_15m == opposite and tf_5m == wanted:
-            return 1.0
-        # All three aligned (momentum entry, less ideal for retracement but valid).
-        if tf_15m == wanted and tf_5m == wanted:
-            return 0.9
-        # 1h aligned, 15m retracing, 5m not yet confirmed.
-        if tf_15m == opposite:
-            return 0.65
-        # 1h and 15m aligned, 5m lagging.
-        return 0.7
+        tf_1d = mtf.get("1d", {}).get("trend")
+        tf_1h = mtf.get("1h", {}).get("trend")
+        tf_4h = mtf.get("4h", {}).get("trend")
+
+        # If neither VMA trend agrees, the strategy already validated structure
+        # (BOS/CHoCH or GP zone). Give a small base — the VMA is lagging.
+        if tf_1h != wanted and tf_4h != wanted:
+            if tf_1d == wanted:
+                return 0.4   # macro agrees even if 1h/4h VMA lag
+            return 0.25      # counter-trend or VMA stale — minimal credit
+
+        # Two ideal patterns:
+        #   GP:  1h trending in direction + 4h pulling back (retracement entry)
+        #   SMC: 4h breaking structure in direction + 1h pulling back into FVG
+        if (tf_1h == wanted and tf_4h == opposite) or (tf_4h == wanted and tf_1h == opposite):
+            base = 1.0    # textbook pullback / SMC FVG retracement
+        elif tf_1h == wanted and tf_4h == wanted:
+            base = 0.75   # momentum continuation
+        elif tf_4h == wanted:
+            base = 0.70   # 4h agrees, 1h neutral
+        else:
+            base = 0.60   # 1h agrees, 4h neutral
+
+        # 1d is a confidence MULTIPLIER only — not a blocker.
+        if tf_1d == wanted:
+            return base
+        elif tf_1d == opposite:
+            return base * 0.75
+        return base * 0.9
 
     def _slope_strength(self, mtf: dict) -> float:
-        slope = abs(mtf.get("1h", {}).get("slope", 0.0))
+        # At a fib retracement, 1h slope is naturally flat (that's the pullback).
+        # Use the strongest slope across timeframes: 1d measures macro trend,
+        # 1h measures entry momentum. Either a strong macro or 1h trend earns points.
+        slope_1d = abs(mtf.get("1d", {}).get("slope", 0.0))
+        slope_1h = abs(mtf.get("1h", {}).get("slope", 0.0))
+        slope = max(slope_1d, slope_1h)
         if slope < 0.002:
             return 0.0
         if slope >= 0.01:
@@ -110,6 +132,30 @@ class ConfidenceScorer:
         if abs(signal.entry_price - ema50) < threshold or abs(signal.entry_price - ema200) < threshold:
             return 1.0
         return 0.0
+
+    def _rsi_score(self, signal) -> float:
+        """
+        Score RSI confirmation quality.
+        LONG: RSI 30-45 = ideal oversold zone (1.0), 45-55 = acceptable (0.5)
+        SHORT: RSI 55-70 = ideal overbought zone (1.0), 45-55 = acceptable (0.5)
+        """
+        rsi = getattr(signal, "rsi", 50.0)
+        if signal.direction == "LONG":
+            if rsi <= 30:
+                return 0.8   # extremely oversold can mean momentum still down
+            if rsi <= 40:
+                return 1.0
+            if rsi <= 50:
+                return 0.7
+            return 0.3       # 50-55 passed the gate but weak confirmation
+        else:
+            if rsi >= 70:
+                return 0.8
+            if rsi >= 60:
+                return 1.0
+            if rsi >= 50:
+                return 0.7
+            return 0.3
 
     def _atr_sanity(self, signal) -> float:
         rng = signal.swing_high - signal.swing_low

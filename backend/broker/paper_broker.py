@@ -26,6 +26,7 @@ class PaperPosition:
     liquidation_price: float
     funding_rate_hr: float
     tp1_hit: bool = False
+    pnl_realized: float = 0.0   # cumulative realized pnl (TP1 partial, etc.)
     opened_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -42,23 +43,40 @@ class PaperBroker:
         logger.info("Paper broker disconnected")
 
     def rehydrate(self, open_trades: list[dict]) -> None:
-        """Reconstruct in-memory positions from DB rows after a bot restart."""
+        """Reconstruct in-memory positions from DB rows after a bot restart.
+
+        The DB `balance` field already reflects margin deductions from the previous
+        session (saved by _update_bot_state → broker.balance). Do NOT deduct margin
+        again here — that would double-count and show a far-too-low balance until
+        each position closes and returns its margin.
+        """
         for t in open_trades:
-            trade_id = str(t["id"])
-            margin = float(t.get("initial_margin") or 0)
-            self.balance -= margin                          # deduct committed capital
-            qty = float(t["quantity"])
-            tp1_hit = bool(t.get("tp1_hit") or False)
+            trade_id  = str(t["id"])
+            margin    = float(t.get("initial_margin") or 0)
+            qty       = float(t["quantity"])
+            tp1_hit   = bool(t.get("tp1_hit") or False)
+            direction = str(t["direction"])
+            entry     = float(t["entry_price"])
+            tp1_price = float(t.get("tp1_price") or t.get("take_profit", 0))
             initial_qty = qty * 2 if tp1_hit else qty
+
+            # Reconstruct already-realized pnl so TP2/SL reports include TP1 profit.
+            if tp1_hit and tp1_price:
+                half = initial_qty * 0.5
+                pnl_realized = (tp1_price - entry) * half if direction == "LONG" \
+                               else (entry - tp1_price) * half
+            else:
+                pnl_realized = 0.0
+
             self.positions[trade_id] = PaperPosition(
                 trade_id=trade_id,
                 coin=str(t["instrument"]),
-                direction=str(t["direction"]),
-                entry_price=float(t["entry_price"]),
+                direction=direction,
+                entry_price=entry,
                 quantity=qty,
                 initial_quantity=initial_qty,
                 stop_loss=float(t["stop_loss"]),
-                tp1=float(t.get("tp1_price") or t.get("take_profit", 0)),
+                tp1=tp1_price,
                 tp2=float(t.get("tp2_price") or t.get("take_profit", 0)),
                 notional=float(t.get("notional") or 0),
                 leverage=int(t.get("leverage") or 1),
@@ -66,6 +84,7 @@ class PaperBroker:
                 liquidation_price=float(t.get("liquidation_price") or 0),
                 funding_rate_hr=float(t.get("funding_rate_hr") or 0),
                 tp1_hit=tp1_hit,
+                pnl_realized=pnl_realized,
             )
         logger.info(f"Rehydrated {len(open_trades)} open position(s) from DB")
 
@@ -92,14 +111,16 @@ class PaperBroker:
 
             # SL check first (worst case)
             if pos.direction == "LONG" and current_price <= pos.stop_loss:
-                pnl = (pos.stop_loss - pos.entry_price) * pos.quantity
-                closures.append((trade_id, "SL", pos.stop_loss, pnl))
-                self._close_full(trade_id, pnl)
+                pnl_sl = (pos.stop_loss - pos.entry_price) * pos.quantity
+                total_pnl = pos.pnl_realized + pnl_sl
+                closures.append((trade_id, "SL", pos.stop_loss, total_pnl))
+                self._close_full(trade_id, pnl_sl)
                 continue
             if pos.direction == "SHORT" and current_price >= pos.stop_loss:
-                pnl = (pos.entry_price - pos.stop_loss) * pos.quantity
-                closures.append((trade_id, "SL", pos.stop_loss, pnl))
-                self._close_full(trade_id, pnl)
+                pnl_sl = (pos.entry_price - pos.stop_loss) * pos.quantity
+                total_pnl = pos.pnl_realized + pnl_sl
+                closures.append((trade_id, "SL", pos.stop_loss, total_pnl))
+                self._close_full(trade_id, pnl_sl)
                 continue
 
             # TP1 — partial close 50%, move SL to BE
@@ -117,19 +138,21 @@ class PaperBroker:
                     pos.tp1_hit = True
                     pos.stop_loss = pos.entry_price     # move to breakeven
                     pos.initial_margin = half_margin    # remaining position holds half margin
-                    self.balance += pnl_partial + half_margin   # return half margin
+                    pos.pnl_realized += pnl_partial     # accumulate for full-trade pnl reporting
+                    self.balance += pnl_partial + half_margin   # return half margin + profit
                     closures.append((trade_id, "TP1_PARTIAL", pos.tp1, pnl_partial))
 
-            # TP2 — close remainder
+            # TP2 — close remainder; report TOTAL trade pnl (TP1 + TP2)
             hit_tp2 = (pos.direction == "LONG" and current_price >= pos.tp2) or \
                       (pos.direction == "SHORT" and current_price <= pos.tp2)
             if hit_tp2:
                 if pos.direction == "LONG":
-                    pnl = (pos.tp2 - pos.entry_price) * pos.quantity
+                    pnl_tp2 = (pos.tp2 - pos.entry_price) * pos.quantity
                 else:
-                    pnl = (pos.entry_price - pos.tp2) * pos.quantity
-                closures.append((trade_id, "TP2", pos.tp2, pnl))
-                self._close_full(trade_id, pnl)
+                    pnl_tp2 = (pos.entry_price - pos.tp2) * pos.quantity
+                total_pnl = pos.pnl_realized + pnl_tp2
+                closures.append((trade_id, "TP2", pos.tp2, total_pnl))
+                self._close_full(trade_id, pnl_tp2)
         return closures
 
     def _close_full(self, trade_id: str, pnl: float) -> None:
@@ -163,7 +186,8 @@ class PaperBroker:
                 pnl_sl   = (pos.entry_price - pos.stop_loss) * pos.quantity
 
             if sl_hit:
-                closures.append((trade_id, "SL", pos.stop_loss, pnl_sl))
+                total_pnl = pos.pnl_realized + pnl_sl
+                closures.append((trade_id, "SL", pos.stop_loss, total_pnl))
                 self._close_full(trade_id, pnl_sl)
                 continue
 
@@ -176,14 +200,16 @@ class PaperBroker:
                 pos.tp1_hit        = True
                 pos.stop_loss      = pos.entry_price
                 pos.initial_margin = half_margin
+                pos.pnl_realized  += pnl_partial
                 self.balance      += pnl_partial + half_margin
                 closures.append((trade_id, "TP1_PARTIAL", pos.tp1, pnl_partial))
 
             if pos.tp1_hit and tp2_hit:
-                pnl = (pos.tp2 - pos.entry_price) * pos.quantity if pos.direction == "LONG" \
-                      else (pos.entry_price - pos.tp2) * pos.quantity
-                closures.append((trade_id, "TP2", pos.tp2, pnl))
-                self._close_full(trade_id, pnl)
+                pnl_tp2 = (pos.tp2 - pos.entry_price) * pos.quantity if pos.direction == "LONG" \
+                          else (pos.entry_price - pos.tp2) * pos.quantity
+                total_pnl = pos.pnl_realized + pnl_tp2
+                closures.append((trade_id, "TP2", pos.tp2, total_pnl))
+                self._close_full(trade_id, pnl_tp2)
 
         return closures
 

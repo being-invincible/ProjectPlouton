@@ -71,14 +71,31 @@ class ChartGenerator:
         x0, x1 = df.index[0], df.index[-1]
         shapes = []
 
-        bands = [
-            ("0",     "0.236", BAND_0_236),
-            ("0.236", "0.382", BAND_236_382),
-            ("0.382", "0.5",   BAND_382_50),
-            ("0.5",   "0.618", BAND_GOLDEN),
-            ("0.618", "0.786", BAND_618_786),
-            ("0.786", "1",     BAND_786_100),
-        ]
+        # Golden pocket is direction-aware:
+        # LONG: price pulled back from swing_high, pocket is 50–61.8% retrace = levels 0.382–0.5 from bottom
+        # SHORT: price bounced from swing_low, pocket is 50–61.8% retrace = levels 0.5–0.618 from bottom
+        if signal.direction == "LONG":
+            gp_upper = swing_low + 0.500 * rng
+            gp_lower = swing_low + 0.382 * rng
+            bands = [
+                ("0",     "0.236", BAND_0_236),
+                ("0.236", "0.382", BAND_236_382),
+                ("0.382", "0.5",   BAND_GOLDEN),
+                ("0.5",   "0.618", BAND_382_50),
+                ("0.618", "0.786", BAND_618_786),
+                ("0.786", "1",     BAND_786_100),
+            ]
+        else:
+            gp_upper = swing_low + 0.618 * rng
+            gp_lower = swing_low + 0.500 * rng
+            bands = [
+                ("0",     "0.236", BAND_0_236),
+                ("0.236", "0.382", BAND_236_382),
+                ("0.382", "0.5",   BAND_382_50),
+                ("0.5",   "0.618", BAND_GOLDEN),
+                ("0.618", "0.786", BAND_618_786),
+                ("0.786", "1",     BAND_786_100),
+            ]
         for lo, hi, color in bands:
             shapes.append(dict(
                 type="rect", xref="x", yref="y",
@@ -102,11 +119,11 @@ class ChartGenerator:
                           annotation_position="left",
                           annotation_font=dict(color=color, size=10))
 
-        fig.add_hline(y=levels["0.5"],   line=dict(color=GOLDEN_GOLD, width=2))
-        fig.add_hline(y=levels["0.618"], line=dict(color=GOLDEN_GOLD, width=2))
+        fig.add_hline(y=gp_upper, line=dict(color=GOLDEN_GOLD, width=2))
+        fig.add_hline(y=gp_lower, line=dict(color=GOLDEN_GOLD, width=2))
         fig.add_annotation(
             x=df.index[int(len(df) * 0.92)],
-            y=(levels["0.5"] + levels["0.618"]) / 2,
+            y=(gp_upper + gp_lower) / 2,
             text="<b>GOLDEN POCKET</b>",
             showarrow=False,
             font=dict(color=GOLDEN_GOLD, size=14),

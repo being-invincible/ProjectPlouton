@@ -12,6 +12,8 @@ from backend.config import settings
 from backend.data.duckdb_store import DuckDBStore
 from backend.data.hyperliquid_fetcher import HyperliquidFetcher
 from backend.strategy.golden_pocket import GoldenPocketStrategy
+from backend.strategy.smc import SMCStrategy
+from backend.strategy.fib_golden_zone import FibGoldenZoneStrategy
 from backend.engine.confidence_scorer import ConfidenceScorer
 from backend.engine.position_sizer import PositionSizer
 from backend.engine.quality_filter import QualityFilter
@@ -27,6 +29,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# Show per-coin filter reasons from the strategy
+logging.getLogger("backend.strategy.golden_pocket").setLevel(logging.DEBUG)
 logger = logging.getLogger("Plouton")
 
 
@@ -46,7 +50,17 @@ class TradingBot:
         self._duckdb_store = DuckDBStore(db_path)
 
         fetcher = HyperliquidFetcher()
-        strategy = GoldenPocketStrategy()
+        if settings.strategy_name == "smc":
+            strategy = SMCStrategy()
+            logging.getLogger("backend.strategy.smc").setLevel(logging.DEBUG)
+            logger.info("Strategy: SMC (BOS/CHoCH + FVG/OB + Liquidity)")
+        elif settings.strategy_name in ("fibgz", "fib_golden_zone"):
+            strategy = FibGoldenZoneStrategy()
+            logging.getLogger("backend.strategy.fib_golden_zone").setLevel(logging.DEBUG)
+            logger.info("Strategy: Fib Golden Zone (fractal swings + EMA/swap confluence + engulfing)")
+        else:
+            strategy = GoldenPocketStrategy()
+            logger.info("Strategy: Golden Pocket (Fibonacci retracement)")
         scorer = ConfidenceScorer()
         sizer = PositionSizer(risk_per_trade_pct=settings.risk_per_trade_pct)
         qf = QualityFilter(
@@ -57,7 +71,12 @@ class TradingBot:
         chart_gen = ChartGenerator(width=settings.chart_width_px, height=settings.chart_height_px)
         discord = DiscordNotifier(webhook_url=settings.discord_webhook_url)
 
-        self._broker = PaperBroker(initial_balance=settings.paper_balance)
+        # Use DB-persisted balance if available so dashboard settings survive restarts.
+        # Fall back to settings.paper_balance only on a fresh install (no DB record yet).
+        saved_state = self._duckdb_store.get_bot_state() or {}
+        saved_balance = float(saved_state.get("balance") or 0) or settings.paper_balance
+
+        self._broker = PaperBroker(initial_balance=saved_balance)
         await self._broker.connect()
 
         open_trades = self._duckdb_store.list_open_trades()
@@ -87,12 +106,15 @@ class TradingBot:
         if open_trades:
             await self._order_mgr.backfill_missed_exits()
 
-        self._duckdb_store.update_bot_state({
+        startup_update = {
             "status": "RUNNING",
             "trading_mode": "paper",
-            "initial_balance": settings.paper_balance,
             "last_updated": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        # Preserve initial_balance if already set; only write it on first-ever run.
+        if not float(saved_state.get("initial_balance") or 0):
+            startup_update["initial_balance"] = saved_balance
+        self._duckdb_store.update_bot_state(startup_update)
         logger.info(f"Plouton initialized — coins: {', '.join(settings.coins)}")
 
     async def run(self) -> None:
