@@ -120,12 +120,16 @@ class ChartGenerator:
             layer="below",
         ))
 
-        for price, color, label, dash in [
+        levels = [
             (signal.entry_price, "#2196f3", f"{signal.direction} @ {signal.entry_price:.4f}", "solid"),
             (signal.stop_loss,   "#ef4444", f"SL @ {signal.stop_loss:.4f}", "dash"),
-            (signal.tp1,         "#26a69a", f"TP1 (1:1.5) @ {signal.tp1:.4f}", "dash"),
-            (signal.tp2,         "#00e676", f"TP2 (1.618 ext) @ {signal.tp2:.4f}", "dash"),
-        ]:
+            (signal.tp1,         "#26a69a", f"TP @ {signal.tp1:.4f}", "dash"),
+        ]
+        if signal.tp2 is not None:
+            levels.append((signal.tp2, "#00e676", f"TP2 (1.618 ext) @ {signal.tp2:.4f}", "dash"))
+        for price, color, label, dash in levels:
+            if price is None:
+                continue
             fig.add_hline(y=price, line=dict(color=color, width=1.5, dash=dash),
                           annotation_text=label, annotation_position="right",
                           annotation_font=dict(color=color, size=10))

@@ -63,7 +63,10 @@ export default function FibChart({ trade }) {
     (async () => {
       try {
         setStatus('loading');
-        const raw = await api.getCandles(trade.instrument, '5m', 5000);
+        const [raw, zigzag] = await Promise.all([
+          api.getCandles(trade.instrument, '5m', 5000),
+          api.getZigZag(trade.instrument, '5m', { periods: 1000, depth: 5, deviationPct: 0.5 }).catch(() => null),
+        ]);
         if (!alive) return;
 
         if (!Array.isArray(raw) || raw.length === 0) {
@@ -380,8 +383,64 @@ export default function FibChart({ trade }) {
           }
         }
 
+        // ── ZigZag overlay ────────────────────────────────────────
+        if (zigzag && Array.isArray(zigzag.pivots) && zigzag.pivots.length >= 2) {
+          const pivotPoints = zigzag.pivots
+            .map(p => ({ time: toUnix(p.time), value: p.price, kind: p.kind, confirmed: p.confirmed }))
+            .filter(p => Number.isFinite(p.time) && Number.isFinite(p.value))
+            .sort((a, b) => a.time - b.time);
+
+          if (pivotPoints.length >= 2) {
+            try {
+              const zigSeries = chart.addSeries(LineSeries, {
+                color:                  '#a855f7',
+                lineWidth:              2,
+                lineStyle:              0,
+                crosshairMarkerVisible: false,
+                lastValueVisible:       false,
+                priceLineVisible:       false,
+                title:                  'ZigZag',
+              });
+              zigSeries.setData(pivotPoints.map(p => ({ time: p.time, value: p.value })));
+            } catch (_) { /* skip if duplicate times collide */ }
+
+            for (const p of pivotPoints) {
+              markers.push({
+                time:     p.time,
+                position: p.kind === 'HIGH' ? 'aboveBar' : 'belowBar',
+                color:    p.confirmed ? '#a855f7' : 'rgba(168,85,247,0.45)',
+                shape:    p.kind === 'HIGH' ? 'arrowDown' : 'arrowUp',
+                text:     `${p.kind === 'HIGH' ? 'H' : 'L'}${p.confirmed ? '' : '?'}  ${p.value.toFixed(2)}`,
+                size:     1,
+              });
+            }
+
+            // Confirmation line — price level the market must cross to invalidate the latest pivot
+            if (zigzag.confirmation_price != null) {
+              try {
+                candleSeries.createPriceLine({
+                  price:            zigzag.confirmation_price,
+                  color:            'rgba(168,85,247,0.6)',
+                  lineWidth:        1,
+                  lineStyle:        2,
+                  axisLabelVisible: true,
+                  title:            'ZZ Confirm',
+                });
+              } catch (_) { /* not critical */ }
+            }
+          }
+        }
+
         markers.sort((a, b) => a.time - b.time);
-        createSeriesMarkers(candleSeries, markers);
+        // Deduplicate markers at exact same (time, shape) — lightweight-charts rejects dups
+        const seen = new Set();
+        const dedupedMarkers = markers.filter(m => {
+          const key = `${m.time}-${m.shape}-${m.position}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        createSeriesMarkers(candleSeries, dedupedMarkers);
 
         // ── Trade level price lines ────────────────────────────────
         candleSeries.createPriceLine({

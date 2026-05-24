@@ -30,9 +30,20 @@ class Settings(BaseSettings):
     execution_tf_default: str = "5m"
     confirmation_tf: str = "15m"
     trend_tf: str = "1h"
+    # New: master trend filter (longer-TF gate that must agree with `trend_tf`).
+    # Set to "" to disable. 4h gives ~16h-48h trend context for 5m-15m execution.
+    master_trend_tf: str = "4h"
+    master_trend_min_slope_pct: float = 0.003
     atr_period: int = 14
     atr_sl_multiplier: float = 1.5
     min_slope_pct: float = 0.002
+
+    # ZigZag (ATR-drawdown)
+    zigzag_atr_mult: float = 2.0
+    zigzag_atr_period: int = 14
+
+    # FVG
+    fvg_min_size_atr: float = 0.25
 
     # Chart
     chart_candles_before_signal: int = 400

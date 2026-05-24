@@ -81,9 +81,76 @@ Python Bot ──async──► Hyperliquid API (Live Orders)
 - **Instrument**: Hyperliquid perpetual futures (configurable) — e.g., BTC, ETH, SOL
 - **Timeframe**: 5 minutes — configurable
 - **Paper balance**: Configurable per session (starts from `.env`)
-- **Strategy**: Fibonacci Retracement (entry at 38.2%/61.8%, SL at 78.6%, R:R 1:2)
+- **Strategy**: Golden Pocket Fibonacci (see full logic below)
 - **Risk**: 1% per trade, max 3 open positions, 5% daily loss limit
 - **Execution**: Real-time async order execution with position tracking
+
+## Golden Pocket Strategy — Full Logic
+
+File: `backend/strategy/golden_pocket.py`. Runs every 5-minute scan cycle on each coin.
+
+### Signal Gate — ALL conditions must pass in order
+
+**1. Enough data**
+- Need ≥ 50 candles on the 5m timeframe
+
+**2. SMA crossover direction**
+- Compute SMA20 (last 20 closes) and SMA50 (last 50 closes)
+- SMA20 > SMA50 → LONG bias (golden cross = uptrend)
+- SMA20 < SMA50 → SHORT bias (death cross = downtrend)
+- SMA20 == SMA50 → reject
+
+**3. SMA separation guard (anti-whipsaw)**
+- `abs(sma20 - sma50) / sma50 < 0.1%` → reject
+- Tangled SMAs = market is chopping sideways = Fibonacci setups are unreliable
+- On a $2130 coin this means SMAs must be >$2.13 apart
+
+**4. SMA50 slope guard (anti-flat)**
+- Compare current SMA50 vs SMA50 from 5 candles ago
+- LONG: SMA50 must be rising ≥ 0.02% over 5 candles
+- SHORT: SMA50 must be falling ≤ -0.02% over 5 candles
+- Flat SMA50 = ranging market = no trend = reject
+
+**5. Swing detection** (`detect_swing`, lookback=66 candles = ~5.5h)
+- Pivot window = 5 candles either side
+- Pivot high: close ≥ all neighbors in window
+- Pivot low: close ≤ all neighbors in window
+- Most recent pivot high + most recent pivot low define the swing
+- `direction = "DOWN"` if last pivot high is more recent than last pivot low (retracing)
+- `direction = "UP"` if last pivot low is more recent (bouncing)
+
+**6. Swing direction must match trend**
+- LONG signal requires `swing.direction == "DOWN"` (price retracing down from a high into the pocket)
+- SHORT signal requires `swing.direction == "UP"` (price bouncing up from a low into the pocket)
+
+**7. Price inside Golden Pocket**
+- Golden Pocket zone = 50%–61.8% Fibonacci retracement of the swing
+- `lower = swing_low + 0.5 × range`
+- `upper = swing_low + 0.618 × range`
+- `zone.lower ≤ last_close ≤ zone.upper` → in pocket → proceed
+- Price outside zone → reject
+
+**8. Swing quality (ATR filter)**
+- `swing_range < 1.5 × ATR` → reject (swing is noise, not a real structure)
+
+### Trade Levels (when signal fires)
+
+- **Entry**: last close price (market order on next scan)
+- **Stop Loss**: below/above 0.382 Fib level with 0.5×ATR buffer
+  - LONG: `SL = (swing_low + 0.382 × range) - 0.5 × ATR`
+  - SHORT: `SL = (swing_high - 0.382 × range) + 0.5 × ATR`
+- **Take Profit (single target)**: between 1.272 and 1.414 Fibonacci extensions
+  - LONG: `TP = (swing_high + 0.272 × range) + 0.382 × (0.142 × range)`
+  - SHORT: mirror of above below swing_low
+  - TP2 is always None — single target design
+
+### Monitor Page Quality Indicators
+Each coin card shows:
+- **UPTREND / DOWNTREND** badge — SMA crossover direction
+- **SMA20 / SMA50** price pills
+- **Fib ready** (green) — all SMA guards pass, bot will fire Fibonacci if price enters pocket
+- **Tangled** (red) — separation < 0.1%, bot blocked
+- **Flat SMA50** (amber) — slope guard failed, bot blocked
 
 ## Future Broker Plans
 - **Zerodha Kite** (existing Indian account, may need NRI conversion)

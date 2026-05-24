@@ -17,6 +17,7 @@ class QualityFilter:
         balance: float,
         confidence: float,
         position_margin: float = 0.0,
+        min_margin_usdt: float = 2.0,
     ) -> bool:
         if confidence < self.min_confidence_pct:
             return False
@@ -25,5 +26,7 @@ class QualityFilter:
         if balance > 0 and (daily_pnl / balance) <= -self.daily_loss_limit_pct:
             return False
         if balance < position_margin:
+            return False
+        if position_margin < min_margin_usdt:
             return False
         return True

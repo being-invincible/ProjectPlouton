@@ -60,7 +60,11 @@ class CoinScanner:
             logger.warning(f"[{self.coin}] mtf trend failed: {e}")
             return None
 
-        # 4. Choose execution TF (15m if 1h slope strong)
+        # 4. Master trend is now a SOFT signal — boosts confidence later, doesn't
+        # block entry. Crypto runs 24/7 so 4h direction is informative but a 1h
+        # reversal off a NY-time impulse is a legit setup even when 4h disagrees.
+
+        # 5. Choose execution TF (15m if 1h slope strong)
         exec_tf = settings.execution_tf_default
         slope_1h = abs(mtf_trend.get("1h", {}).get("slope", 0))
         if slope_1h >= 0.005:
@@ -75,8 +79,11 @@ class CoinScanner:
         if signal is None:
             return None
 
-        # 6. Score confidence
-        confidence = self.confidence_scorer.score(signal=signal, df=exec_df, mtf_trend=mtf_trend)
+        # 6. Score confidence (pass 1m df for micro-TF Fibonacci confluence)
+        df_1m = mtf_data.get("1m")
+        confidence = self.confidence_scorer.score(
+            signal=signal, df=exec_df, mtf_trend=mtf_trend, df_1m=df_1m,
+        )
 
         # 7. Position sizing (must happen before quality check to know margin)
         open_trades = self.duckdb_store.count_open_trades()
@@ -91,6 +98,10 @@ class CoinScanner:
         )
 
         # 8. Quality gate (now includes margin check)
+        if self.duckdb_store.has_open_trade_for_coin(self.coin):
+            logger.info(f"[{self.coin}] skipping — already have open position")
+            return None
+
         if not self.quality_filter.accept(
             open_trades_count=open_trades, daily_pnl=daily_pnl, balance=balance,
             confidence=confidence, position_margin=position.initial_margin,

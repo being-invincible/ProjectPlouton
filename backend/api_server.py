@@ -60,6 +60,14 @@ _RUN_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "run.py
 # the laptop wakes from sleep (heartbeat goes stale but bot is still alive).
 _bot_running_in_process: bool = False
 
+# Optional live WebSocket client injected by run.py for live-price + WS-buffer reads.
+_ws_client = None
+
+
+def set_ws_client(ws) -> None:
+    global _ws_client
+    _ws_client = ws
+
 
 def set_bot_running_in_process(running: bool) -> None:
     global _bot_running_in_process
@@ -67,23 +75,35 @@ def set_bot_running_in_process(running: bool) -> None:
 
 
 def set_store(store: DuckDBStore | None) -> None:
-    """Optionally inject a shared DuckDB store (used by in-process runner)."""
+    """Optionally inject the bot's DuckDB store (used by in-process runner).
+
+    A thread-safe view (cursor on the same connection) is created so API
+    queries from the uvicorn thread don't crash the bot's write connection.
+    """
     global _shared_store
-    _shared_store = store
+    if store is None:
+        _shared_store = None
+    else:
+        try:
+            _shared_store = store.thread_safe_view()
+        except Exception:
+            _shared_store = None
 
 
 def get_store() -> DuckDBStore | None:
+    # In-process bot (run.py): use the thread-safe cursor view of the bot's
+    # write connection. DuckDB refuses a separate read-only connection when a
+    # write connection already exists in the same process, so .cursor() is the
+    # only documented way to share access across threads.
     if _shared_store is not None:
         return _shared_store
-
+    # Standalone API server: open a fresh read-only connection.
     global _store
-    if _store is None:
-        db_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "data", "tradingbot.duckdb",
-        )
-        # Standalone API opens read-only so the bot subprocess can hold the write lock.
-        # If the DB doesn't exist yet (first run), _store stays None until bot creates it.
+    db_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data", "tradingbot.duckdb",
+    )
+    if _store is None or not os.path.exists(db_path):
         try:
             _store = DuckDBStore(db_path, read_only=True)
         except Exception:
@@ -194,11 +214,31 @@ def _bot_process_alive() -> bool:
     return _bot_process is not None and _bot_process.poll() is None
 
 
+def _heartbeat_stale(threshold_sec: int = 1200) -> bool:
+    """Return True if last heartbeat is older than threshold_sec (default 20 min)."""
+    try:
+        store = get_store()
+        if store is None:
+            return True
+        state = store.get_bot_state() or {}
+        heartbeat = _parse_iso_ts(state.get("last_heartbeat") or state.get("last_updated"))
+        if heartbeat is None:
+            return True
+        age = int((datetime.now(timezone.utc) - heartbeat).total_seconds())
+        return age > threshold_sec
+    except Exception:
+        return True
+
+
 @app.post("/api/bot/start")
 async def bot_start():
-    global _bot_process
-    if _bot_running_in_process:
+    global _bot_process, _bot_running_in_process
+    if _bot_running_in_process and not _heartbeat_stale():
         return {"ok": True, "status": "already_running_in_process"}
+    if _bot_running_in_process and _heartbeat_stale():
+        # In-process bot loop appears hung (event loop blocked after long sleep).
+        # Clear the flag so we can spawn a fresh subprocess.
+        _bot_running_in_process = False
     if _bot_process_alive():
         return {"ok": True, "status": "already_running", "pid": _bot_process.pid}
     try:
@@ -241,7 +281,7 @@ async def get_bot_state():
 async def get_runtime():
     """Bot runtime diagnostics (alive heartbeat + actual/effective market state)."""
     store = get_store()
-    state = store.get_bot_state() or {}
+    state = (store.get_bot_state() if store is not None else None) or {}
 
     heartbeat = _parse_iso_ts(state.get("last_heartbeat") or state.get("last_updated"))
     now = datetime.now(timezone.utc)
@@ -307,6 +347,177 @@ async def patch_settings(payload: SettingsPatch):
 
     store.update_bot_state(updates)
     return {"ok": True, "updated": len(updates)}
+
+
+# ── Live Price (WebSocket) ───────────────────────────────────────
+
+@app.get("/api/live_price")
+async def get_live_price(instrument: str = "BTC"):
+    """Last tick price from the WS buffer. Returns null if WS not connected yet."""
+    if _ws_client is None:
+        return {"instrument": instrument, "price": None, "source": "rest_only"}
+    price = _ws_client.get_latest_price(instrument)
+    return {"instrument": instrument, "price": price, "source": "websocket"}
+
+
+# ── ZigZag ───────────────────────────────────────────────────────
+
+@app.get("/api/zigzag")
+async def get_zigzag(
+    instrument: str = "BTC",
+    timeframe: str = "5m",
+    periods: int = 500,
+    atr_period: int = 14,
+    atr_mult: float = 2.0,
+    # Legacy kwargs ignored — kept so older frontends don't 422.
+    depth: int | None = None,
+    deviation_pct: float | None = None,
+):
+    """ZigZag pivots (ATR-drawdown rule). Latest pivot may be tentative.
+
+    Prefers the live WS buffer; falls back to DuckDB if WS isn't seeded yet.
+    """
+    from strategy.zigzag import compute_zigzag, confirmation_price
+
+    df = None
+    if _ws_client is not None:
+        try:
+            df = _ws_client.get_latest_candles(instrument, timeframe, periods=periods)
+        except Exception:
+            df = None
+    if df is None or df.empty:
+        store = get_store()
+        if store is None:
+            return {"pivots": [], "confirmation_price": None, "source": "none"}
+        df = store.get_candles(instrument=instrument, timeframe=timeframe, periods=periods)
+
+    if df is None or df.empty:
+        return {"pivots": [], "confirmation_price": None, "source": "empty"}
+
+    pivots = compute_zigzag(df, atr_period=atr_period, atr_mult=atr_mult)
+    # Decorate each pivot with HH/HL/LH/LL market-structure label.
+    # Key by (index, kind) — same bar can carry both a HIGH and a LOW pivot when
+    # ZigZag fires both extremes in the same candle range.
+    from strategy.structure import label_pivots
+    labelled = label_pivots(df, atr_period=atr_period, atr_mult=atr_mult)
+    label_by_key = {(p["index"], p["kind"]): p["label"] for p in labelled}
+    for p in pivots:
+        p["label"] = label_by_key.get((p["index"], p["kind"]), "H" if p["kind"] == "HIGH" else "L")
+    conf = confirmation_price(pivots, df, atr_mult=atr_mult)
+    return {
+        "pivots": pivots,
+        "confirmation_price": conf,
+        "source": "websocket" if _ws_client is not None else "duckdb",
+        "params": {"atr_period": atr_period, "atr_mult": atr_mult, "periods": periods},
+    }
+
+
+# ── Market Structure (BOS / CHoCH) ───────────────────────────────
+
+def _load_candles_for_compute(instrument: str, timeframe: str, periods: int):
+    """Shared helper: prefer WS buffer, fall back to DuckDB."""
+    df = None
+    if _ws_client is not None:
+        try:
+            df = _ws_client.get_latest_candles(instrument, timeframe, periods=periods)
+        except Exception:
+            df = None
+    if df is None or df.empty:
+        store = get_store()
+        if store is None:
+            return None, "none"
+        df = store.get_candles(instrument=instrument, timeframe=timeframe, periods=periods)
+    if df is None or df.empty:
+        return None, "empty"
+    return df, "websocket" if _ws_client is not None else "duckdb"
+
+
+@app.get("/api/structure")
+async def get_structure(
+    instrument: str = "BTC",
+    timeframe: str = "5m",
+    periods: int = 500,
+    atr_mult: float = 2.0,
+):
+    """BOS + CHoCH events derived from confirmed ZigZag pivots."""
+    from strategy.structure import detect_structure
+    df, source = _load_candles_for_compute(instrument, timeframe, periods)
+    if df is None:
+        return {"events": [], "source": source}
+    events = detect_structure(df, atr_mult=atr_mult)
+    return {"events": events, "source": source, "params": {"atr_mult": atr_mult, "periods": periods}}
+
+
+@app.get("/api/rsi_cloud")
+async def get_rsi_cloud(
+    instrument: str = "BTC",
+    timeframe: str = "5m",
+    periods: int = 500,
+    rsi_period: int = 14,
+    upper: float = 70.0,
+    lower: float = 30.0,
+):
+    """RSI(14) values + overbought/oversold zone ranges for cloud shading."""
+    from strategy.rsi_cloud import compute_rsi_with_zones
+    df, source = _load_candles_for_compute(instrument, timeframe, periods)
+    if df is None:
+        return {"points": [], "zones": [], "source": source}
+    out = compute_rsi_with_zones(df, period=rsi_period, upper=upper, lower=lower)
+    out["source"] = source
+    return out
+
+
+@app.get("/api/fib_extensions")
+async def get_fib_extensions(
+    instrument: str = "BTC",
+    timeframe: str = "5m",
+    periods: int = 500,
+    atr_mult: float = 2.0,
+):
+    """5-wave Fibonacci extension projection (1.618/2.618/3.618 from wave-1 base)."""
+    from strategy.fib_extensions import detect_5wave
+    df, source = _load_candles_for_compute(instrument, timeframe, periods)
+    if df is None:
+        return {"setup": None, "source": source}
+    setup = detect_5wave(df, atr_mult=atr_mult)
+    return {"setup": setup, "source": source, "params": {"atr_mult": atr_mult, "periods": periods}}
+
+
+# ── Fair Value Gaps ──────────────────────────────────────────────
+
+@app.get("/api/fvg")
+async def get_fvg(
+    instrument: str = "BTC",
+    timeframe: str = "5m",
+    periods: int = 500,
+    min_size_atr: float = 0.25,
+    unfilled_only: bool = False,
+):
+    """3-bar Fair Value Gap zones. Defaults filter sub-quarter-ATR gaps."""
+    from strategy.fvg import detect_fvg
+
+    df = None
+    if _ws_client is not None:
+        try:
+            df = _ws_client.get_latest_candles(instrument, timeframe, periods=periods)
+        except Exception:
+            df = None
+    if df is None or df.empty:
+        store = get_store()
+        if store is None:
+            return {"fvgs": [], "source": "none"}
+        df = store.get_candles(instrument=instrument, timeframe=timeframe, periods=periods)
+    if df is None or df.empty:
+        return {"fvgs": [], "source": "empty"}
+
+    fvgs = detect_fvg(df, min_size_atr=min_size_atr)
+    if unfilled_only:
+        fvgs = [f for f in fvgs if not f["filled"]]
+    return {
+        "fvgs": fvgs,
+        "source": "websocket" if _ws_client is not None else "duckdb",
+        "params": {"min_size_atr": min_size_atr, "unfilled_only": unfilled_only},
+    }
 
 
 # ── Candles ──────────────────────────────────────────────────────
@@ -536,8 +747,27 @@ async def get_monitor():
             sma20 = round(sum(closes[:20]) / 20, 4) if len(closes) >= 20 else None
             sma50 = round(sum(closes[:50]) / 50, 4) if len(closes) >= 50 else None
             trend = None
+            sma_separation_pct = None
+            sma50_slope = None
+            sma_quality = None  # "CLEAN" | "TANGLED" | "FLAT" | None
             if sma20 is not None and sma50 is not None:
                 trend = "UP" if sma20 > sma50 else "DOWN"
+                sma_separation_pct = round(abs(sma20 - sma50) / sma50 * 100, 3)
+                # SMA50 slope: compare current vs 5 candles ago (need 55 closes)
+                if len(closes) >= 55:
+                    sma50_prev = round(sum(closes[5:55]) / 50, 4)
+                    sma50_slope = round((sma50 - sma50_prev) / sma50_prev * 100, 4)
+                separation_ok = sma_separation_pct >= 0.1
+                slope_ok = sma50_slope is None or (
+                    (trend == "UP" and sma50_slope >= 0.02) or
+                    (trend == "DOWN" and sma50_slope <= -0.02)
+                )
+                if separation_ok and slope_ok:
+                    sma_quality = "CLEAN"
+                elif not separation_ok:
+                    sma_quality = "TANGLED"
+                else:
+                    sma_quality = "FLAT"
             result.append(_clean({
                 "coin": coin,
                 "last_scan": last_candle[0] if last_candle else None,
@@ -551,6 +781,9 @@ async def get_monitor():
                 "sma20": sma20,
                 "sma50": sma50,
                 "trend": trend,
+                "sma_separation_pct": sma_separation_pct,
+                "sma50_slope": sma50_slope,
+                "sma_quality": sma_quality,
             }))
         except Exception:
             result.append({"coin": coin, "has_data": False, "candle_count": 0,

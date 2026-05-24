@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.config import settings
 from backend.data.duckdb_store import DuckDBStore
 from backend.data.hyperliquid_fetcher import HyperliquidFetcher
+from backend.data.hyperliquid_ws import HyperliquidWebSocket
 from backend.strategy.golden_pocket import GoldenPocketStrategy
 from backend.engine.confidence_scorer import ConfidenceScorer
 from backend.engine.position_sizer import PositionSizer
@@ -38,6 +39,7 @@ class TradingBot:
         self._broker: PaperBroker | None = None
         self._order_mgr: OrderManager | None = None
         self._runner: AsyncRunner | None = None
+        self._ws: HyperliquidWebSocket | None = None
 
     async def initialize(self) -> None:
         db_path = os.path.join(
@@ -46,6 +48,19 @@ class TradingBot:
         self._duckdb_store = DuckDBStore(db_path)
 
         fetcher = HyperliquidFetcher()
+
+        # WebSocket: start it, seed buffers from a single REST snapshot, then
+        # subsequent reads come from the live in-memory buffer (tick-by-tick).
+        self._ws = HyperliquidWebSocket(coins=settings.coins, timeframes=["1m", "5m", "15m", "1h", "4h"])
+        fetcher.attach_ws(self._ws)
+        await self._ws.start()
+        ws_ready = await self._ws.wait_connected(timeout=15)
+        if ws_ready:
+            logger.info("Hyperliquid WS live — seeding buffers from REST in background")
+            asyncio.create_task(self._seed_ws_buffers(fetcher), name="ws-seed")
+        else:
+            logger.warning("Hyperliquid WS did not connect in 15s — falling back to REST polling")
+
         strategy = GoldenPocketStrategy()
         scorer = ConfidenceScorer()
         sizer = PositionSizer(risk_per_trade_pct=settings.risk_per_trade_pct)
@@ -95,9 +110,47 @@ class TradingBot:
         })
         logger.info(f"Plouton initialized — coins: {', '.join(settings.coins)}")
 
+    async def _seed_ws_buffers(self, fetcher) -> None:
+        """Backfill the WS rolling buffer with REST snapshots, off the event loop."""
+        import pandas as _pd
+
+        def _fetch(coin: str, tf: str):
+            try:
+                return fetcher._exchange.fetch_ohlcv(
+                    fetcher._to_ccxt_symbol(coin), timeframe=tf, limit=500
+                )
+            except Exception as exc:
+                logger.warning(f"WS seed REST failed for {coin}/{tf}: {exc}")
+                return None
+
+        for coin in settings.coins:
+            for tf in ["1m", "5m", "15m", "1h", "4h"]:
+                rows = await asyncio.to_thread(_fetch, coin, tf)
+                if not rows:
+                    continue
+                df = _pd.DataFrame(rows, columns=["ts_ms", "Open", "High", "Low", "Close", "Volume"])
+                df["Timestamp"] = _pd.to_datetime(df["ts_ms"], unit="ms", utc=True)
+                df = df.set_index("Timestamp").drop(columns=["ts_ms"])
+                if self._ws:
+                    self._ws.seed_buffer(coin, tf, df)
+        logger.info("WS buffers seeded for all coins/timeframes")
+
+    async def _heartbeat_loop(self) -> None:
+        """Write heartbeat every 30s so the UI recovers quickly after macOS sleep."""
+        while True:
+            await asyncio.sleep(30)
+            if self._duckdb_store:
+                try:
+                    self._duckdb_store.update_bot_state({
+                        "last_heartbeat": datetime.now(timezone.utc).isoformat()
+                    })
+                except Exception:
+                    pass
+
     async def run(self) -> None:
         if self._duckdb_store is None or self._runner is None:
             raise RuntimeError("Call initialize() before run()")
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         try:
             while True:
                 cycle_start = datetime.now(timezone.utc)
@@ -109,14 +162,13 @@ class TradingBot:
                 if trade_ids:
                     logger.info(f"executed {len(trade_ids)} trades this cycle: {trade_ids}")
 
-                self._duckdb_store.update_bot_state({
-                    "last_heartbeat": datetime.now(timezone.utc).isoformat()
-                })
-
                 await asyncio.sleep(300)
         except KeyboardInterrupt:
             logger.info("Stopped by user")
         finally:
+            heartbeat_task.cancel()
+            if self._ws:
+                await self._ws.stop()
             if self._broker:
                 await self._broker.disconnect()
             if self._duckdb_store:

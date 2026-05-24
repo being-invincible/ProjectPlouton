@@ -1,0 +1,257 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © ProjectHermes — Golden Pocket Strategy (mirrors Python bot logic exactly)
+//@version=5
+indicator("Hermes · Golden Pocket", overlay=true, max_lines_count=500, max_labels_count=200)
+
+// ─── INPUTS ──────────────────────────────────────────────────────────────────
+grpSwing    = "Swing Detection"
+pivotWindow = input.int(5,    "Pivot Window (bars each side)", minval=2,   group=grpSwing)
+swingLookbk = input.int(100,  "Max Swing Lookback (bars)",    minval=20,  group=grpSwing)
+
+grpTrend    = "1h VMA Trend Filter"
+vmaLen      = input.int(20,   "VMA Length",            minval=5,   group=grpTrend)
+vmaSlopeBk  = input.int(10,   "Slope Lookback (bars)", minval=2,   group=grpTrend)
+minSlopePct = input.float(0.2,"Min Absolute Slope (%)",minval=0.0, step=0.05, group=grpTrend,
+              tooltip="Python: min_slope_pct=0.002 → converted to % here = 0.2")
+
+grpRisk     = "Risk Parameters"
+atrPeriod   = input.int(14,   "ATR Period",          minval=1,   group=grpRisk)
+atrSlMult   = input.float(1.5,"ATR SL Multiplier",   minval=0.5, step=0.1, group=grpRisk)
+minSwingAtr = input.float(1.5,"Min Swing/ATR Ratio", minval=0.5, step=0.1, group=grpRisk)
+
+grpViz      = "Display"
+showZone    = input.bool(true,  "Show GP Zone",       group=grpViz)
+showSwing   = input.bool(true,  "Show Swing H/L",     group=grpViz)
+showVMA1h   = input.bool(true,  "Show 1h VMA",        group=grpViz)
+showFibs    = input.bool(true,  "Show All Fib Levels", group=grpViz)
+showLabels  = input.bool(true,  "Show Entry Labels",   group=grpViz)
+
+// ─── VMA (Volume-Weighted Moving Average) ────────────────────────────────────
+// Matches Python: sum(close * volume, 20) / sum(volume, 20)
+vmaCalc(src, vol, len) =>
+    math.sum(src * vol, len) / math.sum(vol, len)
+
+// Pull 1h VMA and slope via security — no lookahead (matches live bot behaviour)
+[vma1h_now, vma1h_back] = request.security(syminfo.tickerid, "60",
+    [vmaCalc(close, volume, vmaLen), vmaCalc(close, volume, vmaLen)[vmaSlopeBk]],
+    lookahead=barmerge.lookahead_off)
+
+// slope = (current - prev) / prev * 100  (same formula as duckdb_store.py:426)
+slope1h    = vma1h_back != 0 ? (vma1h_now - vma1h_back) / vma1h_back * 100 : 0.0
+trend1hUp  = slope1h >= minSlopePct
+trend1hDn  = slope1h <= -minSlopePct
+trendValid = trend1hUp or trend1hDn
+
+// ─── PIVOT DETECTION (mirrors detect_swing, pivot_window=5) ──────────────────
+// ta.pivothigh/low use close prices, confirmed pivotWindow bars after the pivot bar
+pivHigh = ta.pivothigh(close, pivotWindow, pivotWindow)
+pivLow  = ta.pivotlow(close,  pivotWindow, pivotWindow)
+
+// Persist most recent pivots
+var float lastPH    = na
+var int   lastPHBar = na
+var float lastPL    = na
+var int   lastPLBar = na
+
+if not na(pivHigh)
+    lastPH    := pivHigh
+    lastPHBar := bar_index - pivotWindow  // actual pivot bar (before confirmation lag)
+
+if not na(pivLow)
+    lastPL    := pivLow
+    lastPLBar := bar_index - pivotWindow
+
+// Swing valid only when both pivots exist within lookback
+swingValid = not na(lastPH) and not na(lastPL) and
+             (bar_index - lastPHBar) <= swingLookbk and
+             (bar_index - lastPLBar) <= swingLookbk
+
+// Python: direction = "DOWN" if last_high_ts > last_low_ts else "UP"
+// "UP"   = last pivot low is more recent  → draw fibs from high downward → LONG zone
+// "DOWN" = last pivot high is more recent → draw fibs from low upward   → SHORT zone
+swingIsUp = swingValid and lastPLBar > lastPHBar  // pivot low more recent
+swingIsDn = swingValid and lastPHBar > lastPLBar  // pivot high more recent
+
+swingRange = swingValid ? lastPH - lastPL : na
+
+// ─── GOLDEN POCKET ZONE ───────────────────────────────────────────────────────
+// Python golden_pocket_zone():
+//   UP  → upper = high - 0.5*rng,   lower = high - 0.618*rng
+//   DOWN→ upper = low  + 0.618*rng, lower = low  + 0.5*rng
+gpLongUpper = swingValid ? lastPH - 0.5   * swingRange : na
+gpLongLower = swingValid ? lastPH - 0.618 * swingRange : na
+gpShorUpper = swingValid ? lastPL + 0.618 * swingRange : na
+gpShorLower = swingValid ? lastPL + 0.5   * swingRange : na
+
+// Fib levels for display
+fib786Long  = swingValid ? lastPH - 0.786 * swingRange : na
+fib382Long  = swingValid ? lastPH - 0.382 * swingRange : na
+fib100Long  = swingValid ? lastPH - 1.0   * swingRange : na   // = swing low
+fib161Long  = swingValid ? lastPH + 0.618 * swingRange : na   // TP2 extension
+
+fib786Shor  = swingValid ? lastPL + 0.786 * swingRange : na
+fib382Shor  = swingValid ? lastPL + 0.382 * swingRange : na
+fib161Shor  = swingValid ? lastPL - 0.618 * swingRange : na   // TP2 extension
+
+// ─── ATR ─────────────────────────────────────────────────────────────────────
+atr = ta.atr(atrPeriod)
+
+// Quality gate: swing range must be > 1.5 * ATR (golden_pocket.py:165)
+qualityOK = swingValid and (atr <= 0 or swingRange >= minSwingAtr * atr)
+
+// ─── ENTRY CONDITIONS ─────────────────────────────────────────────────────────
+// Python (LONG): low dips into zone OR close inside zone
+longZoneTouch = low  <= gpLongUpper and low  >= gpLongLower
+longZoneClose = close <= gpLongUpper and close >= gpLongLower
+longEntry = trend1hUp and swingIsUp and qualityOK and (longZoneTouch or longZoneClose)
+
+// Python (SHORT): high reaches into zone OR close inside zone
+shorZoneTouch = high >= gpShorLower and high <= gpShorUpper
+shorZoneClose = close >= gpShorLower and close <= gpShorUpper
+shortEntry = trend1hDn and swingIsDn and qualityOK and (shorZoneTouch or shorZoneClose)
+
+// ─── STOP LOSS ────────────────────────────────────────────────────────────────
+// Python _stop_loss(): hybrid — whichever is FURTHER from entry
+// LONG: min(sl_fib_break, sl_atr)  — lower = further below entry
+// SHORT: max(sl_fib_break, sl_atr) — higher = further above entry
+entryLong  = close
+slFibLong  = lastPH - 0.786 * swingRange     // 78.6% break invalidates swing
+slAtrLong  = entryLong - atrSlMult * atr
+stopLong   = math.min(slFibLong, slAtrLong)  // further from entry
+
+entryShort = close
+slFibShor  = lastPL + 0.786 * swingRange
+slAtrShor  = entryShort + atrSlMult * atr
+stopShort  = math.max(slFibShor, slAtrShor)
+
+// ─── TAKE PROFITS ─────────────────────────────────────────────────────────────
+// Python _take_profits():
+//   TP1 = entry + 1.5 * risk        (1.5 R:R)
+//   TP2 = swing_high + 0.618 * rng  (1.618 Fib extension)
+riskLong = math.abs(entryLong - stopLong)
+tp1Long  = entryLong + 1.5 * riskLong
+tp2Long  = lastPH    + 0.618 * swingRange
+
+riskShort = math.abs(entryShort - stopShort)
+tp1Short  = entryShort - 1.5 * riskShort
+tp2Short  = lastPL     - 0.618 * swingRange
+
+// ─── VISUAL — 1h VMA ─────────────────────────────────────────────────────────
+plot(showVMA1h ? vma1h_now : na, "1h VMA-20",
+     color=trend1hUp ? color.new(#26a69a, 0) : trend1hDn ? color.new(#ef5350, 0) : color.gray,
+     linewidth=2)
+
+// ─── VISUAL — SWING HIGH / LOW LINES ─────────────────────────────────────────
+hlineHigh = showSwing and swingValid ? lastPH : na
+hlineLow  = showSwing and swingValid ? lastPL : na
+plot(hlineHigh, "Swing High", color=color.new(color.red,   50), linewidth=1, style=plot.style_linebr)
+plot(hlineLow,  "Swing Low",  color=color.new(color.green, 50), linewidth=1, style=plot.style_linebr)
+
+// ─── VISUAL — FIB LEVELS ─────────────────────────────────────────────────────
+// Show relevant fib levels based on active swing direction
+activeLong = swingIsUp and trend1hUp
+activeShor = swingIsDn and trend1hDn
+
+plot(showFibs and activeLong ? fib786Long  : na, "Fib 78.6% (SL zone)", color=color.new(color.red,     60), linewidth=1, style=plot.style_linebr)
+plot(showFibs and activeLong ? gpLongUpper : na, "Fib 50%   (GP top)",  color=color.new(#f59e0b, 20),      linewidth=2, style=plot.style_linebr)
+plot(showFibs and activeLong ? gpLongLower : na, "Fib 61.8% (GP bot)",  color=color.new(#f59e0b, 20),      linewidth=2, style=plot.style_linebr)
+plot(showFibs and activeLong ? fib382Long  : na, "Fib 38.2%",           color=color.new(color.blue,   60), linewidth=1, style=plot.style_linebr)
+plot(showFibs and activeLong ? fib161Long  : na, "Fib 161.8% (TP2 ext)",color=color.new(#26a69a, 40),      linewidth=1, style=plot.style_linebr)
+
+plot(showFibs and activeShor ? fib786Shor  : na, "Fib 78.6% (SL zone)", color=color.new(color.red,     60), linewidth=1, style=plot.style_linebr)
+plot(showFibs and activeShor ? gpShorUpper : na, "Fib 61.8% (GP top)",  color=color.new(#f59e0b, 20),      linewidth=2, style=plot.style_linebr)
+plot(showFibs and activeShor ? gpShorLower : na, "Fib 50%   (GP bot)",  color=color.new(#f59e0b, 20),      linewidth=2, style=plot.style_linebr)
+plot(showFibs and activeShor ? fib382Shor  : na, "Fib 38.2%",           color=color.new(color.blue,   60), linewidth=1, style=plot.style_linebr)
+plot(showFibs and activeShor ? fib161Shor  : na, "Fib 161.8% (TP2 ext)",color=color.new(#26a69a, 40),      linewidth=1, style=plot.style_linebr)
+
+// ─── VISUAL — GOLDEN POCKET ZONE FILL ────────────────────────────────────────
+gpLongTopPlot = plot(showZone and activeLong ? gpLongUpper : na, display=display.none)
+gpLongBotPlot = plot(showZone and activeLong ? gpLongLower : na, display=display.none)
+fill(gpLongTopPlot, gpLongBotPlot, color=color.new(#f59e0b, 82), title="GP Zone (Long)")
+
+gpShorTopPlot = plot(showZone and activeShor ? gpShorUpper : na, display=display.none)
+gpShorBotPlot = plot(showZone and activeShor ? gpShorLower : na, display=display.none)
+fill(gpShorTopPlot, gpShorBotPlot, color=color.new(#f59e0b, 82), title="GP Zone (Short)")
+
+// ─── VISUAL — ENTRY SIGNALS ───────────────────────────────────────────────────
+plotshape(longEntry,  title="LONG Entry",  style=shape.triangleup,
+          location=location.belowbar, color=#26a69a, size=size.normal)
+plotshape(shortEntry, title="SHORT Entry", style=shape.triangledown,
+          location=location.abovebar, color=#ef5350, size=size.normal)
+
+// ─── VISUAL — ENTRY LABELS WITH SL / TP ──────────────────────────────────────
+if showLabels and longEntry
+    fibTriggered = math.abs(close - gpLongUpper) < math.abs(close - gpLongLower) ? "0.5" : "0.618"
+    rr = riskLong > 0 ? str.tostring(math.round(riskLong * 1.5 / riskLong, 2)) : "?"
+    label.new(bar_index, low - atr * 0.5,
+        "LONG · GP " + fibTriggered +
+        "\nEntry: " + str.tostring(math.round(entryLong,  4)) +
+        "\nSL:    " + str.tostring(math.round(stopLong,   4)) +
+        "\nTP1:   " + str.tostring(math.round(tp1Long,    4)) +
+        "\nTP2:   " + str.tostring(math.round(tp2Long,    4)) +
+        "\n1h slope: " + str.tostring(math.round(slope1h, 3)) + "%",
+        style=label.style_label_up, color=#26a69a,
+        textcolor=color.white, size=size.small)
+
+if showLabels and shortEntry
+    fibTriggered = math.abs(close - gpShorLower) < math.abs(close - gpShorUpper) ? "0.5" : "0.618"
+    label.new(bar_index, high + atr * 0.5,
+        "SHORT · GP " + fibTriggered +
+        "\nEntry: " + str.tostring(math.round(entryShort, 4)) +
+        "\nSL:    " + str.tostring(math.round(stopShort,  4)) +
+        "\nTP1:   " + str.tostring(math.round(tp1Short,   4)) +
+        "\nTP2:   " + str.tostring(math.round(tp2Short,   4)) +
+        "\n1h slope: " + str.tostring(math.round(slope1h, 3)) + "%",
+        style=label.style_label_down, color=#ef5350,
+        textcolor=color.white, size=size.small)
+
+// ─── VISUAL — PIVOT MARKERS ───────────────────────────────────────────────────
+plotshape(showSwing and not na(pivHigh), title="Pivot High",
+          style=shape.circle, location=location.abovebar,
+          color=color.new(color.red, 30), size=size.tiny)
+plotshape(showSwing and not na(pivLow), title="Pivot Low",
+          style=shape.circle, location=location.belowbar,
+          color=color.new(color.green, 30), size=size.tiny)
+
+// ─── INFO TABLE ───────────────────────────────────────────────────────────────
+var table infoBox = table.new(position.top_right, 2, 8,
+    bgcolor=color.new(color.black, 70), border_color=color.new(color.gray, 60), border_width=1)
+
+if barstate.islast
+    cell(r, k, v) =>
+        table.cell(infoBox, k, r, v, text_color=color.white, text_size=size.small)
+
+    table.cell(infoBox, 0, 0, "Hermes · Golden Pocket", text_color=color.new(#f59e0b, 0),
+               text_size=size.normal, bgcolor=color.new(color.black, 50))
+    table.cell(infoBox, 1, 0, "", bgcolor=color.new(color.black, 50))
+
+    table.cell(infoBox, 0, 1, "1h Trend",    text_color=color.gray,  text_size=size.small)
+    table.cell(infoBox, 1, 1, trend1hUp ? "UP ▲" : trend1hDn ? "DOWN ▼" : "FLAT —",
+               text_color=trend1hUp ? #26a69a : trend1hDn ? #ef5350 : color.gray, text_size=size.small)
+
+    table.cell(infoBox, 0, 2, "1h Slope",    text_color=color.gray,  text_size=size.small)
+    table.cell(infoBox, 1, 2, str.tostring(math.round(slope1h, 3)) + "%",
+               text_color=math.abs(slope1h) >= minSlopePct ? color.white : color.new(color.red, 20), text_size=size.small)
+
+    table.cell(infoBox, 0, 3, "Swing Dir",   text_color=color.gray,  text_size=size.small)
+    table.cell(infoBox, 1, 3, swingIsUp ? "UP (Long bias)" : swingIsDn ? "DOWN (Short bias)" : "—",
+               text_color=color.white, text_size=size.small)
+
+    table.cell(infoBox, 0, 4, "GP Zone",     text_color=color.gray,  text_size=size.small)
+    gpZoneStr = swingIsUp and not na(gpLongLower) ?
+        str.tostring(math.round(gpLongLower, 2)) + " – " + str.tostring(math.round(gpLongUpper, 2)) :
+        swingIsDn and not na(gpShorLower) ?
+        str.tostring(math.round(gpShorLower, 2)) + " – " + str.tostring(math.round(gpShorUpper, 2)) : "—"
+    table.cell(infoBox, 1, 4, gpZoneStr,     text_color=#f59e0b,     text_size=size.small)
+
+    table.cell(infoBox, 0, 5, "ATR",         text_color=color.gray,  text_size=size.small)
+    table.cell(infoBox, 1, 5, str.tostring(math.round(atr, 4)),
+               text_color=color.white, text_size=size.small)
+
+    table.cell(infoBox, 0, 6, "Quality Gate",text_color=color.gray,  text_size=size.small)
+    table.cell(infoBox, 1, 6, qualityOK ? "PASS ✓" : "FAIL ✗",
+               text_color=qualityOK ? #26a69a : #ef5350, text_size=size.small)
+
+    table.cell(infoBox, 0, 7, "Signal",      text_color=color.gray,  text_size=size.small)
+    table.cell(infoBox, 1, 7, longEntry ? "LONG ENTRY" : shortEntry ? "SHORT ENTRY" : "—",
+               text_color=longEntry ? #26a69a : shortEntry ? #ef5350 : color.gray, text_size=size.small)

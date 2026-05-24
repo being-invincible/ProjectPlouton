@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 class DuckDBStore:
     """Persistent DuckDB analytics store for the trading bot."""
 
-    def __init__(self, db_path: str | None = None, read_only: bool = False):
+    def __init__(self, db_path: str | None = None, read_only: bool = False,
+                 _existing_conn=None):
         """
         Initialize DuckDB connection.
 
@@ -34,6 +35,9 @@ class DuckDBStore:
             db_path: Path to the DuckDB database file.
                      Defaults to backend/data/tradingbot.duckdb
             read_only: Open the database in read-only mode.
+            _existing_conn: Internal — pre-opened duckdb.Connection (e.g. from
+                            another store's .cursor() for thread-safe sharing).
+                            When set, db_path and read_only are ignored.
         """
         if db_path is None:
             db_path = os.path.join(
@@ -43,11 +47,23 @@ class DuckDBStore:
 
         self.db_path = db_path
         self._lock = threading.RLock()
-        self.conn = duckdb.connect(db_path, read_only=read_only)
-        if not read_only:
-            self._create_tables()
-            self._migrate_v2()
+        if _existing_conn is not None:
+            self.conn = _existing_conn
+        else:
+            self.conn = duckdb.connect(db_path, read_only=read_only)
+            if not read_only:
+                self._create_tables()
+                self._migrate_v2()
         logger.info(f"DuckDB store opened: {db_path}")
+
+    def thread_safe_view(self) -> "DuckDBStore":
+        """Return a DuckDBStore backed by .cursor() on the same connection.
+
+        Use this for cross-thread reads (e.g. API server thread reading data
+        written by the bot's main thread). DuckDB cursors are thread-safe;
+        the raw connection is not.
+        """
+        return DuckDBStore(db_path=self.db_path, _existing_conn=self.conn.cursor())
 
     def _create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -360,6 +376,7 @@ class DuckDBStore:
     def compute_mtf_trend(
         self,
         instrument: str = "GC=F",
+        timeframes: list[str] | None = None,
     ) -> dict:
         """
         Compute trend direction across all stored timeframes using
@@ -382,8 +399,9 @@ class DuckDBStore:
             }
         """
         result = {}
+        tf_list = timeframes or ["4h", "1h", "15m", "5m"]
 
-        for tf in ["1h", "15m", "5m"]:
+        for tf in tf_list:
             try:
                 row = self.conn.execute("""
                     WITH vma_calc AS (
@@ -692,7 +710,7 @@ class DuckDBStore:
     def create_trade(self, data: dict) -> str:
         """Insert a trade record. Returns the trade ID."""
         import uuid
-        trade_id = str(uuid.uuid4())[:16]
+        trade_id = str(uuid.uuid4())
         self.conn.execute("""
             INSERT INTO trades
                 (id, timestamp, instrument, direction, entry_price,
@@ -772,6 +790,13 @@ class DuckDBStore:
             "SELECT COUNT(*) FROM trades WHERE status = 'OPEN'"
         ).fetchone()
         return row[0] if row else 0
+
+    def has_open_trade_for_coin(self, coin: str) -> bool:
+        """True if any open position exists for this coin."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE status = 'OPEN' AND instrument = ?", [coin]
+        ).fetchone()
+        return (row[0] if row else 0) > 0
 
     # Blob columns excluded from list views (too large for JSON, fetched separately)
     _BLOB_COLS = {"chart_initial_png", "chart_final_png"}

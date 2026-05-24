@@ -74,30 +74,15 @@ class OrderManager:
             for trade_id, reason, exit_price, pnl in closures:
                 trade = self.store.get_trade(trade_id)
 
-                if reason == "TP1_PARTIAL":
-                    original_margin = float(trade.get("initial_margin") or 0)
-                    margin_update = {"initial_margin": original_margin * 0.5} if original_margin > 0 else {}
-                    self.store.update_trade(trade_id, {
-                        "tp1_hit": True,
-                        "stop_loss": trade["entry_price"],
-                        **margin_update,
-                    })
-                    now_iso = datetime.now(timezone.utc).isoformat()
+                if reason == "TP1_HIT":
+                    self.store.update_trade(trade_id, {"tp1_hit": True})
                     self.store.insert_trade_event({
                         "id": str(uuid.uuid4()),
                         "trade_id": trade_id,
-                        "event_type": "TP1_PARTIAL",
+                        "event_type": "TP1_HIT",
                         "price": exit_price,
-                        "pnl_partial": pnl,
-                        "timestamp": now_iso,
-                    })
-                    self.store.insert_trade_event({
-                        "id": str(uuid.uuid4()),
-                        "trade_id": trade_id,
-                        "event_type": "SL_MOVED",
-                        "price": float(trade["entry_price"]),
                         "pnl_partial": None,
-                        "timestamp": now_iso,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
                     continue
 
@@ -109,6 +94,7 @@ class OrderManager:
                     "status": "CLOSED",
                     "exit_price": exit_price,
                     "exit_reason": reason,
+                    "exit_timestamp": datetime.now(timezone.utc).isoformat(),
                     "pnl": pnl,
                     "chart_final_png": final_chart,
                 })
@@ -150,24 +136,13 @@ class OrderManager:
                     if trade is None:
                         continue
 
-                    if reason == "TP1_PARTIAL":
-                        original_margin = float(trade.get("initial_margin") or 0)
-                        margin_update = {"initial_margin": original_margin * 0.5} if original_margin > 0 else {}
-                        self.store.update_trade(trade_id, {
-                            "tp1_hit": True,
-                            "stop_loss": trade["entry_price"],
-                            **margin_update,
-                        })
-                        now_iso = datetime.now(timezone.utc).isoformat()
+                    if reason == "TP1_HIT":
+                        self.store.update_trade(trade_id, {"tp1_hit": True})
                         self.store.insert_trade_event({
                             "id": str(uuid.uuid4()), "trade_id": trade_id,
-                            "event_type": "TP1_PARTIAL", "price": exit_price,
-                            "pnl_partial": pnl, "timestamp": now_iso,
-                        })
-                        self.store.insert_trade_event({
-                            "id": str(uuid.uuid4()), "trade_id": trade_id,
-                            "event_type": "SL_MOVED", "price": float(trade["entry_price"]),
-                            "pnl_partial": None, "timestamp": now_iso,
+                            "event_type": "TP1_HIT", "price": exit_price,
+                            "pnl_partial": None,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
                         })
                         continue
 
@@ -176,6 +151,7 @@ class OrderManager:
                         "status": "CLOSED",
                         "exit_price": exit_price,
                         "exit_reason": reason,
+                        "exit_timestamp": datetime.now(timezone.utc).isoformat(),
                         "pnl": pnl,
                     })
                     duration = self._format_duration(trade.get("timestamp"))

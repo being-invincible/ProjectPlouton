@@ -41,7 +41,10 @@ class DiscordNotifier:
                 {"name": "Risk", "value": f"${position.risk_amount:.2f}", "inline": True},
                 {"name": "Entry", "value": f"`${signal.entry_price:,.4f}`", "inline": True},
                 {"name": "Stop Loss", "value": f"`${signal.stop_loss:,.4f}`", "inline": True},
-                {"name": "TP1 / TP2", "value": f"`${signal.tp1:,.4f}` / `${signal.tp2:,.4f}`", "inline": True},
+                {"name": "Take Profit", "value": (
+                    f"`${signal.tp1:,.4f}` / `${signal.tp2:,.4f}`"
+                    if signal.tp2 is not None else f"`${signal.tp1:,.4f}`"
+                ), "inline": True},
                 {"name": "Qty", "value": f"`{position.quantity:.4f}`", "inline": True},
                 {"name": "Notional", "value": f"`${position.notional:,.2f}`", "inline": True},
                 {"name": "Leverage", "value": f"`{position.suggested_leverage}×`", "inline": True},

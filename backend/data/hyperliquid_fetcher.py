@@ -12,11 +12,21 @@ logger = logging.getLogger(__name__)
 
 
 class HyperliquidFetcher:
-    """Wraps ccxt.hyperliquid for OHLCV and market metadata."""
+    """Wraps ccxt.hyperliquid for OHLCV and market metadata.
+
+    Optionally backed by a live WebSocket buffer — when `ws_client` is set,
+    fetch_ohlcv prefers the buffer (fresh tick data) and falls back to REST
+    only when the buffer hasn't been populated yet for that (coin, tf).
+    """
 
     def __init__(self) -> None:
         self._exchange = ccxt.hyperliquid({"enableRateLimit": True})
         self._markets_cache: Optional[Dict] = None
+        self._ws_client = None  # set later via attach_ws()
+
+    def attach_ws(self, ws_client) -> None:
+        """Attach a live HyperliquidWebSocket so reads prefer the in-memory buffer."""
+        self._ws_client = ws_client
 
     @staticmethod
     def _to_ccxt_symbol(coin: str) -> str:
@@ -26,7 +36,17 @@ class HyperliquidFetcher:
         return f"{coin.upper()}/USDC:USDC"
 
     def fetch_ohlcv(self, coin: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
-        """Fetch OHLCV candles. Returns DataFrame with [Open, High, Low, Close, Volume] indexed by UTC Timestamp."""
+        """Fetch OHLCV candles. Returns DataFrame with [Open, High, Low, Close, Volume] indexed by UTC Timestamp.
+
+        Prefers the WebSocket buffer if it holds enough candles; otherwise hits REST.
+        """
+        if self._ws_client is not None:
+            try:
+                df = self._ws_client.get_latest_candles(coin, timeframe, periods=limit)
+                if not df.empty and len(df) >= min(limit, 50):
+                    return df
+            except Exception as exc:
+                logger.debug(f"WS buffer read failed for {coin}/{timeframe}: {exc}")
         symbol = self._to_ccxt_symbol(coin)
         rows = self._exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         if not rows:
@@ -38,7 +58,7 @@ class HyperliquidFetcher:
 
     def fetch_multi_timeframe(self, coin: str) -> Dict[str, pd.DataFrame]:
         """Fetch analysis TFs at maximum useful depth."""
-        depths = {"1m": 200, "5m": 1000, "15m": 1000, "1h": 1000}
+        depths = {"1m": 200, "5m": 1000, "15m": 1000, "1h": 1000, "4h": 500}
         out: Dict[str, pd.DataFrame] = {}
         for tf, limit in depths.items():
             try:

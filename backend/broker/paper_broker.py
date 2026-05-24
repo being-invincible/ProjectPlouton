@@ -1,10 +1,10 @@
-"""Paper broker for Hermes v2 — tracks notional, simulates two-stage TP, BE move after TP1."""
+"""Paper broker — full position held to TP2 or SL. TP1 is a milestone marker only."""
 
 import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -13,13 +13,12 @@ logger = logging.getLogger(__name__)
 class PaperPosition:
     trade_id: str
     coin: str
-    direction: str               # LONG / SHORT
+    direction: str
     entry_price: float
     quantity: float
     stop_loss: float
     tp1: float
-    tp2: float
-    initial_quantity: float      # original size before TP1 partial
+    tp2: float | None
     notional: float
     leverage: int
     initial_margin: float
@@ -46,26 +45,22 @@ class PaperBroker:
         for t in open_trades:
             trade_id = str(t["id"])
             margin = float(t.get("initial_margin") or 0)
-            self.balance -= margin                          # deduct committed capital
-            qty = float(t["quantity"])
-            tp1_hit = bool(t.get("tp1_hit") or False)
-            initial_qty = qty * 2 if tp1_hit else qty
+            self.balance -= margin
             self.positions[trade_id] = PaperPosition(
                 trade_id=trade_id,
                 coin=str(t["instrument"]),
                 direction=str(t["direction"]),
                 entry_price=float(t["entry_price"]),
-                quantity=qty,
-                initial_quantity=initial_qty,
+                quantity=float(t["quantity"]),
                 stop_loss=float(t["stop_loss"]),
                 tp1=float(t.get("tp1_price") or t.get("take_profit", 0)),
-                tp2=float(t.get("tp2_price") or t.get("take_profit", 0)),
+                tp2=(float(t["tp2_price"]) if t.get("tp2_price") is not None else None),
                 notional=float(t.get("notional") or 0),
                 leverage=int(t.get("leverage") or 1),
                 initial_margin=margin,
                 liquidation_price=float(t.get("liquidation_price") or 0),
                 funding_rate_hr=float(t.get("funding_rate_hr") or 0),
-                tp1_hit=tp1_hit,
+                tp1_hit=bool(t.get("tp1_hit") or False),
             )
         logger.info(f"Rehydrated {len(open_trades)} open position(s) from DB")
 
@@ -73,113 +68,50 @@ class PaperBroker:
                       stop_loss: float, tp1: float, tp2: float, notional: float, leverage: int,
                       initial_margin: float, liquidation_price: float, funding_rate_hr: float) -> str:
         trade_id = str(uuid.uuid4())
-        self.balance -= initial_margin          # deduct margin upfront
+        self.balance -= initial_margin
         self.positions[trade_id] = PaperPosition(
             trade_id=trade_id, coin=coin, direction=direction, entry_price=entry,
-            quantity=quantity, initial_quantity=quantity, stop_loss=stop_loss, tp1=tp1, tp2=tp2,
+            quantity=quantity, stop_loss=stop_loss, tp1=tp1, tp2=tp2,
             notional=notional, leverage=leverage, initial_margin=initial_margin,
             liquidation_price=liquidation_price, funding_rate_hr=funding_rate_hr,
         )
-        logger.info(f"OPENED {direction} {coin} qty={quantity:.4f} entry={entry:.4f} SL={stop_loss:.4f} margin=${initial_margin:.2f} balance=${self.balance:.2f}")
+        tp2_str = f"{tp2:.4f}" if tp2 is not None else "None"
+        logger.info(
+            f"OPENED {direction} {coin} qty={quantity:.4f} entry={entry:.4f} "
+            f"SL={stop_loss:.4f} TP1={tp1:.4f} TP2={tp2_str} margin=${initial_margin:.2f} "
+            f"balance=${self.balance:.2f}"
+        )
         return trade_id
 
     def check_exits(self, coin: str, current_price: float) -> list[tuple[str, str, float, float]]:
-        """Returns list of (trade_id, exit_reason, exit_price, realized_pnl) for closures this tick."""
+        """Returns (trade_id, reason, price, pnl). TP1 emits TP1_HIT with pnl=0 (informational)."""
         closures = []
         for trade_id, pos in list(self.positions.items()):
             if pos.coin != coin:
                 continue
 
-            # SL check first (worst case)
             if pos.direction == "LONG" and current_price <= pos.stop_loss:
                 pnl = (pos.stop_loss - pos.entry_price) * pos.quantity
                 closures.append((trade_id, "SL", pos.stop_loss, pnl))
                 self._close_full(trade_id, pnl)
                 continue
+
             if pos.direction == "SHORT" and current_price >= pos.stop_loss:
                 pnl = (pos.entry_price - pos.stop_loss) * pos.quantity
                 closures.append((trade_id, "SL", pos.stop_loss, pnl))
                 self._close_full(trade_id, pnl)
                 continue
 
-            # TP1 — partial close 50%, move SL to BE
             if not pos.tp1_hit:
-                hit_tp1 = (pos.direction == "LONG" and current_price >= pos.tp1) or \
+                hit_tp1 = (pos.direction == "LONG"  and current_price >= pos.tp1) or \
                           (pos.direction == "SHORT" and current_price <= pos.tp1)
                 if hit_tp1:
-                    half = pos.initial_quantity * 0.5
-                    if pos.direction == "LONG":
-                        pnl_partial = (pos.tp1 - pos.entry_price) * half
-                    else:
-                        pnl_partial = (pos.entry_price - pos.tp1) * half
-                    half_margin = pos.initial_margin * 0.5
-                    pos.quantity -= half
                     pos.tp1_hit = True
-                    pos.stop_loss = pos.entry_price     # move to breakeven
-                    pos.initial_margin = half_margin    # remaining position holds half margin
-                    self.balance += pnl_partial + half_margin   # return half margin
-                    closures.append((trade_id, "TP1_PARTIAL", pos.tp1, pnl_partial))
+                    closures.append((trade_id, "TP1_HIT", pos.tp1, 0.0))
 
-            # TP2 — close remainder
-            hit_tp2 = (pos.direction == "LONG" and current_price >= pos.tp2) or \
+            hit_tp2 = (pos.direction == "LONG"  and current_price >= pos.tp2) or \
                       (pos.direction == "SHORT" and current_price <= pos.tp2)
             if hit_tp2:
-                if pos.direction == "LONG":
-                    pnl = (pos.tp2 - pos.entry_price) * pos.quantity
-                else:
-                    pnl = (pos.entry_price - pos.tp2) * pos.quantity
-                closures.append((trade_id, "TP2", pos.tp2, pnl))
-                self._close_full(trade_id, pnl)
-        return closures
-
-    def _close_full(self, trade_id: str, pnl: float) -> None:
-        pos = self.positions.pop(trade_id, None)
-        if pos is None:
-            return
-        self.balance += pnl + pos.initial_margin   # return margin on close
-        logger.info(f"CLOSED {pos.direction} {pos.coin} pnl=${pnl:.2f} margin_returned=${pos.initial_margin:.2f} balance=${self.balance:.2f}")
-
-    def check_exits_candle(self, coin: str, high: float, low: float) -> list[tuple[str, str, float, float]]:
-        """OHLC-aware exit check for backfill replay.
-
-        Uses candle low for SL (LONG) / high for SL (SHORT) — simulates worst-case wick.
-        Uses candle high for TP (LONG) / low for TP (SHORT).
-        SL is evaluated before TP within a candle (conservative assumption).
-        """
-        closures = []
-        for trade_id, pos in list(self.positions.items()):
-            if pos.coin != coin:
-                continue
-
-            if pos.direction == "LONG":
-                sl_hit   = low  <= pos.stop_loss
-                tp1_hit  = high >= pos.tp1
-                tp2_hit  = high >= pos.tp2
-                pnl_sl   = (pos.stop_loss - pos.entry_price) * pos.quantity
-            else:
-                sl_hit   = high >= pos.stop_loss
-                tp1_hit  = low  <= pos.tp1
-                tp2_hit  = low  <= pos.tp2
-                pnl_sl   = (pos.entry_price - pos.stop_loss) * pos.quantity
-
-            if sl_hit:
-                closures.append((trade_id, "SL", pos.stop_loss, pnl_sl))
-                self._close_full(trade_id, pnl_sl)
-                continue
-
-            if not pos.tp1_hit and tp1_hit:
-                half = pos.initial_quantity * 0.5
-                pnl_partial = (pos.tp1 - pos.entry_price) * half if pos.direction == "LONG" \
-                              else (pos.entry_price - pos.tp1) * half
-                half_margin = pos.initial_margin * 0.5
-                pos.quantity      -= half
-                pos.tp1_hit        = True
-                pos.stop_loss      = pos.entry_price
-                pos.initial_margin = half_margin
-                self.balance      += pnl_partial + half_margin
-                closures.append((trade_id, "TP1_PARTIAL", pos.tp1, pnl_partial))
-
-            if pos.tp1_hit and tp2_hit:
                 pnl = (pos.tp2 - pos.entry_price) * pos.quantity if pos.direction == "LONG" \
                       else (pos.entry_price - pos.tp2) * pos.quantity
                 closures.append((trade_id, "TP2", pos.tp2, pnl))
@@ -187,6 +119,50 @@ class PaperBroker:
 
         return closures
 
+    def check_exits_candle(self, coin: str, high: float, low: float) -> list[tuple[str, str, float, float]]:
+        """OHLC-aware exit check for backfill replay. SL evaluated before TP (conservative)."""
+        closures = []
+        for trade_id, pos in list(self.positions.items()):
+            if pos.coin != coin:
+                continue
+
+            if pos.direction == "LONG":
+                sl_hit  = low  <= pos.stop_loss
+                tp1_hit = high >= pos.tp1
+                tp2_hit = high >= pos.tp2
+                pnl_sl  = (pos.stop_loss - pos.entry_price) * pos.quantity
+            else:
+                sl_hit  = high >= pos.stop_loss
+                tp1_hit = low  <= pos.tp1
+                tp2_hit = low  <= pos.tp2
+                pnl_sl  = (pos.entry_price - pos.stop_loss) * pos.quantity
+
+            if sl_hit:
+                closures.append((trade_id, "SL", pos.stop_loss, pnl_sl))
+                self._close_full(trade_id, pnl_sl)
+                continue
+
+            if not pos.tp1_hit and tp1_hit:
+                pos.tp1_hit = True
+                closures.append((trade_id, "TP1_HIT", pos.tp1, 0.0))
+
+            if tp2_hit:
+                pnl = (pos.tp2 - pos.entry_price) * pos.quantity if pos.direction == "LONG" \
+                      else (pos.entry_price - pos.tp2) * pos.quantity
+                closures.append((trade_id, "TP2", pos.tp2, pnl))
+                self._close_full(trade_id, pnl)
+
+        return closures
+
+    def _close_full(self, trade_id: str, pnl: float) -> None:
+        pos = self.positions.pop(trade_id, None)
+        if pos is None:
+            return
+        self.balance += pnl + pos.initial_margin
+        logger.info(
+            f"CLOSED {pos.direction} {pos.coin} pnl=${pnl:.2f} "
+            f"margin_returned=${pos.initial_margin:.2f} balance=${self.balance:.2f}"
+        )
+
     def update_positions(self, coin: str, current_price: float) -> list[tuple[str, str, float, float]]:
-        """Convenience entry — same as check_exits."""
         return self.check_exits(coin, current_price)

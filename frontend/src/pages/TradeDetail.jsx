@@ -48,10 +48,11 @@ function PnlRow({ label, value, color }) {
 
 function EventChip({ eventType, price, pnlPartial, timestamp }) {
   const configs = {
-    TP1_PARTIAL: { label: 'TP1 Hit', color: '#10b981', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.2)' },
-    SL_MOVED:    { label: 'SL → Breakeven', color: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.2)' },
+    TP1_HIT:     { label: 'TP1 Reached', color: '#10b981', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.2)' },
     TP2_HIT:     { label: 'TP2 Hit', color: '#10b981', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.2)' },
     SL_HIT:      { label: 'Stopped Out', color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.2)' },
+    TP1_PARTIAL: { label: 'TP1 (legacy)', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.2)' },
+    SL_MOVED:    { label: 'SL Moved (legacy)', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.2)' },
   };
   const cfg = configs[eventType] || { label: eventType, color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.2)' };
   return (
@@ -95,7 +96,30 @@ export default function TradeDetail() {
   }, [id]);
 
   if (loading) return <div style={{ padding: 24 }}><Skeleton className="h-96" /></div>;
-  if (!trade || !trade.id) return <p style={{ padding: 24, color: '#94a3b8' }}>Trade not found</p>;
+  if (!trade || !trade.id) return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <Link to="/trades">
+          <Button variant="secondary" size="sm"><ArrowLeft size={16} /></Button>
+        </Link>
+        <span style={{ fontSize: 14, color: '#64748b' }}>Back to trades</span>
+      </div>
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        gap: 12, padding: '64px 24px', borderRadius: 12,
+        background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+      }}>
+        <span style={{ fontSize: 32 }}>🔍</span>
+        <p style={{ fontSize: 16, fontWeight: 600, color: '#f1f5f9', margin: 0 }}>Trade not found</p>
+        <p style={{ fontSize: 13, color: '#475569', margin: 0 }}>
+          This trade may have been deleted or the ID is invalid.
+        </p>
+        <Link to="/trades" style={{ marginTop: 8 }}>
+          <Button variant="secondary" size="sm">View all trades</Button>
+        </Link>
+      </div>
+    </div>
+  );
 
   const pnl = formatPnL(trade.pnl);
   const isClosed  = trade.status === 'CLOSED';

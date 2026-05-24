@@ -45,6 +45,7 @@ const api = {
   /** Fetch a single trade */
   async getTrade(id) {
     const res = await fetch(`${API_BASE}/trades/${id}`);
+    if (!res.ok) return null;
     return res.json();
   },
 
@@ -95,6 +96,47 @@ const api = {
   /** Per-coin monitoring status */
   async getMonitor() {
     const res = await fetch(`${API_BASE}/monitor`);
+    return res.json();
+  },
+
+  /** Live tick price from the Hyperliquid WebSocket buffer */
+  async getLivePrice(instrument = 'BTC') {
+    const res = await fetch(`${API_BASE}/live_price?instrument=${instrument}`);
+    return res.json();
+  },
+
+  /** ZigZag pivots for an instrument/timeframe (ATR-drawdown rule) */
+  async getZigZag(instrument = 'BTC', timeframe = '5m', { periods = 500, atrPeriod = 14, atrMult = 2.0 } = {}) {
+    const params = new URLSearchParams({ instrument, timeframe, periods, atr_period: atrPeriod, atr_mult: atrMult });
+    const res = await fetch(`${API_BASE}/zigzag?${params}`);
+    return res.json();
+  },
+
+  /** Fair Value Gaps for an instrument/timeframe */
+  async getFvg(instrument = 'BTC', timeframe = '5m', { periods = 500, minSizeAtr = 0.25, unfilledOnly = false } = {}) {
+    const params = new URLSearchParams({ instrument, timeframe, periods, min_size_atr: minSizeAtr, unfilled_only: unfilledOnly });
+    const res = await fetch(`${API_BASE}/fvg?${params}`);
+    return res.json();
+  },
+
+  /** Market-structure events (BOS / CHoCH) from confirmed ZigZag pivots */
+  async getStructure(instrument = 'BTC', timeframe = '5m', { periods = 500, atrMult = 2.0 } = {}) {
+    const params = new URLSearchParams({ instrument, timeframe, periods, atr_mult: atrMult });
+    const res = await fetch(`${API_BASE}/structure?${params}`);
+    return res.json();
+  },
+
+  /** RSI(14) + overbought/oversold zone ranges */
+  async getRsiCloud(instrument = 'BTC', timeframe = '5m', { periods = 500, rsiPeriod = 14, upper = 70, lower = 30 } = {}) {
+    const params = new URLSearchParams({ instrument, timeframe, periods, rsi_period: rsiPeriod, upper, lower });
+    const res = await fetch(`${API_BASE}/rsi_cloud?${params}`);
+    return res.json();
+  },
+
+  /** 5-wave Fibonacci extension setup */
+  async getFibExtensions(instrument = 'BTC', timeframe = '5m', { periods = 500, atrMult = 2.0 } = {}) {
+    const params = new URLSearchParams({ instrument, timeframe, periods, atr_mult: atrMult });
+    const res = await fetch(`${API_BASE}/fib_extensions?${params}`);
     return res.json();
   },
 

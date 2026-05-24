@@ -12,6 +12,9 @@ Usage:
 """
 
 import asyncio
+import atexit
+import shutil
+import subprocess
 import sys
 import os
 import time
@@ -19,6 +22,48 @@ import argparse
 import threading
 
 import uvicorn
+
+
+_caffeinate_proc: subprocess.Popen | None = None
+
+
+def start_caffeinate() -> None:
+    """Prevent macOS from sleeping while bot runs.
+
+    `caffeinate -i` blocks IDLE sleep (display can still dim). Process dies
+    with the bot — atexit cleanup is a belt-and-braces fallback.
+    """
+    global _caffeinate_proc
+    if sys.platform != "darwin":
+        return
+    if shutil.which("caffeinate") is None:
+        return
+    if _caffeinate_proc is not None and _caffeinate_proc.poll() is None:
+        return
+    try:
+        _caffeinate_proc = subprocess.Popen(
+            ["caffeinate", "-i", "-w", str(os.getpid())],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"[OK] caffeinate active (PID {_caffeinate_proc.pid}) — Mac won't idle-sleep while bot runs")
+        atexit.register(stop_caffeinate)
+    except Exception as exc:
+        print(f"[WARN] could not start caffeinate: {exc}")
+
+
+def stop_caffeinate() -> None:
+    global _caffeinate_proc
+    if _caffeinate_proc is not None and _caffeinate_proc.poll() is None:
+        try:
+            _caffeinate_proc.terminate()
+            _caffeinate_proc.wait(timeout=3)
+        except Exception:
+            try:
+                _caffeinate_proc.kill()
+            except Exception:
+                pass
+    _caffeinate_proc = None
 
 # Add backend to path
 BACKEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
@@ -55,6 +100,7 @@ async def async_main(args):
     api_server = None
     api_thread = None
 
+    start_caffeinate()
     await bot.initialize()
 
     if not args.no_api:
@@ -63,9 +109,10 @@ async def async_main(args):
         # Share the bot's DuckDB connection with the API so both use the same
         # write-mode connection (avoids the macOS exclusive-lock conflict where
         # a read-only connection in the same process cannot acquire the lock).
-        from api_server import set_bot_running_in_process, set_store
+        from api_server import set_bot_running_in_process, set_store, set_ws_client
         set_bot_running_in_process(True)
         set_store(bot._duckdb_store)
+        set_ws_client(bot._ws)
 
     print("\n[INFO] Starting Trading Bot...\n")
 
@@ -81,6 +128,7 @@ async def async_main(args):
             if api_thread is not None:
                 api_thread.join(timeout=5)
             print("[OK] FastAPI server stopped")
+        stop_caffeinate()
 
 
 def main():

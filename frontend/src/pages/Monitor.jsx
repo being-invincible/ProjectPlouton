@@ -145,11 +145,9 @@ function CoinCard({ coin, delay, onClick }) {
         </div>
       )}
 
-      {/* SMA20 / SMA50 */}
+      {/* SMA20 / SMA50 + quality */}
       {coin.sma20 != null && coin.sma50 != null && (
-        <div style={{
-          display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap',
-        }}>
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: '4px',
             padding: '3px 8px', borderRadius: '6px',
@@ -170,6 +168,28 @@ function CoinCard({ coin, delay, onClick }) {
               SMA50 {formatPrice(coin.sma50)}
             </span>
           </div>
+          {/* SMA quality guard status */}
+          {coin.sma_quality && (() => {
+            const qColor = coin.sma_quality === 'CLEAN' ? '#10b981' : coin.sma_quality === 'TANGLED' ? '#ef4444' : '#f59e0b';
+            const qLabel = coin.sma_quality === 'CLEAN' ? '✓ Fib ready' : coin.sma_quality === 'TANGLED' ? '⚡ Tangled' : '→ Flat SMA50';
+            return (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '4px',
+                padding: '3px 8px', borderRadius: '6px',
+                background: `rgba(${coin.sma_quality === 'CLEAN' ? '16,185,129' : coin.sma_quality === 'TANGLED' ? '239,68,68' : '245,158,11'},0.08)`,
+                border: `1px solid rgba(${coin.sma_quality === 'CLEAN' ? '16,185,129' : coin.sma_quality === 'TANGLED' ? '239,68,68' : '245,158,11'},0.2)`,
+              }}>
+                <span style={{ fontSize: '10px', fontWeight: 700, color: qColor, fontFamily: 'JetBrains Mono, monospace' }}>
+                  {qLabel}
+                </span>
+                {coin.sma_separation_pct != null && (
+                  <span style={{ fontSize: '10px', color: '#475569', fontFamily: 'JetBrains Mono, monospace' }}>
+                    {coin.sma_separation_pct.toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
