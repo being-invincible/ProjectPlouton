@@ -10,6 +10,26 @@ import { SkeletonTable } from '../components/ui/Skeleton';
 
 const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'SUI', 'TAO', 'LINK', 'HYPE', 'ADA'];
 
+function isBreakeven(trade) {
+  const entry = parseFloat(trade.entry_price || 0);
+  const sl = parseFloat(trade.stop_loss || 0);
+  return entry > 0 && sl > 0 && Math.abs(entry - sl) / entry < 0.0005;
+}
+
+function exitLabel(trade) {
+  const r = (trade.exit_reason || '').toUpperCase();
+  const be = isBreakeven(trade);
+  if (r.includes('TP2') || r.includes('BACKTEST_TP2')) return { text: 'TP2 Hit', color: '#10b981' };
+  if (r.includes('TP1')) return { text: 'TP1 Hit', color: '#10b981' };
+  if ((r.includes('SL') || r.includes('STOP')) && be) return { text: 'Breakeven Exit', color: '#60a5fa' };
+  if (r.includes('SL') || r.includes('STOP')) return { text: 'Stopped Out', color: '#ef4444' };
+  if (r.includes('MANUAL') || r.includes('CLOSED')) return { text: 'Closed', color: '#94a3b8' };
+  if (trade.pnl > 0) return { text: 'TP Hit', color: '#10b981' };
+  if (trade.pnl < 0 && be) return { text: 'Breakeven Exit', color: '#60a5fa' };
+  if (trade.pnl < 0) return { text: 'Stopped Out', color: '#ef4444' };
+  return { text: trade.exit_reason || '—', color: '#64748b' };
+}
+
 const COIN_COLORS = {
   BTC: '#f59e0b', ETH: '#6366f1', SOL: '#a855f7', XRP: '#06b6d4',
   BNB: '#eab308', SUI: '#3b82f6', TAO: '#10b981', LINK: '#2563eb',
@@ -437,7 +457,7 @@ export default function Trades() {
                               {formatCurrency(trade.entry_price)}
                             </div>
                             {margin > 0 && (
-                              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 3 }}>
+                              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 2 }}>
                                 <span style={{ fontSize: 10, color: '#334155' }}>invested</span>
                                 <span style={{ fontSize: 11, fontWeight: 600, color: '#60a5fa', fontFamily: 'JetBrains Mono, monospace' }}>
                                   ${margin.toFixed(2)}
@@ -445,15 +465,63 @@ export default function Trades() {
                                 {lev > 1 && <span style={{ fontSize: 10, color: '#334155' }}>{lev.toFixed(0)}×</span>}
                               </div>
                             )}
+                            {trade.stop_loss && (
+                              isBreakeven(trade) ? (
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                                    background: 'rgba(96,165,250,0.1)', color: '#60a5fa' }}>SL → BE</span>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                                  <span style={{ fontSize: 10, color: '#334155' }}>SL</span>
+                                  <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#ef4444' }}>
+                                    {formatCurrency(trade.stop_loss)}
+                                  </span>
+                                </div>
+                              )
+                            )}
                           </td>
 
                           {/* Exit */}
-                          <td style={{ padding: '15px 18px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: '#64748b' }}>
-                            {trade.exit_price
-                              ? formatCurrency(trade.exit_price)
-                              : isOpen
-                              ? <span style={{ fontSize: 11, color: '#3b82f6' }}>live</span>
-                              : <span style={{ color: '#1e293b' }}>—</span>}
+                          <td style={{ padding: '15px 18px', textAlign: 'right' }}>
+                            {isOpen ? (
+                              <div>
+                                <span style={{ fontSize: 11, color: '#3b82f6', fontFamily: 'JetBrains Mono, monospace' }}>live</span>
+                                {trade.tp1_price && (
+                                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                                    <span style={{ fontSize: 10, color: '#334155' }}>TP1</span>
+                                    <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#10b981' }}>
+                                      {formatCurrency(trade.tp1_price)}
+                                    </span>
+                                  </div>
+                                )}
+                                {trade.tp2_price && (
+                                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                                    <span style={{ fontSize: 10, color: '#334155' }}>TP2</span>
+                                    <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#10b981' }}>
+                                      {formatCurrency(trade.tp2_price)}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ) : trade.exit_price ? (
+                              <div>
+                                <div style={{ fontFamily: 'JetBrains Mono, monospace', color: '#e2e8f0', fontWeight: 600 }}>
+                                  {formatCurrency(trade.exit_price)}
+                                </div>
+                                {(() => { const lbl = exitLabel(trade); return (
+                                  <div style={{ marginTop: 3 }}>
+                                    <span style={{
+                                      fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                                      background: `${lbl.color}18`, color: lbl.color,
+                                      letterSpacing: '0.04em',
+                                    }}>{lbl.text}</span>
+                                  </div>
+                                ); })()}
+                              </div>
+                            ) : (
+                              <span style={{ color: '#1e293b' }}>—</span>
+                            )}
                           </td>
 
                           {/* P&L */}

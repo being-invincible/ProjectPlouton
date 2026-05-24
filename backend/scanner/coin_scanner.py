@@ -74,17 +74,22 @@ class CoinScanner:
         # 6. Score confidence
         confidence = self.confidence_scorer.score(signal=signal, df=exec_df, mtf_trend=mtf_trend)
 
-        # 7. Position sizing (must happen before quality check to know margin)
+        # 7. Gate checks — read DB state AFTER signal validation to minimise
+        #    the window between the read and the write (reduces parallel-race risk).
         open_trade_list = self.duckdb_store.list_open_trades()
         open_trades = len(open_trade_list)
         bot_state = self.duckdb_store.get_bot_state() or {}
         balance = float(bot_state.get("balance", settings.paper_balance))
         daily_pnl = float(bot_state.get("daily_pnl", 0.0))
 
-        # One position per coin at a time — prevents re-entering the same setup
-        # across consecutive scan cycles when the position is still open.
+        # One position per coin at a time.
         if any(t.get("instrument") == self.coin for t in open_trade_list):
             logger.debug(f"[{self.coin}] position already open, skipping")
+            return None
+
+        # 2-hour cooldown after an SL hit — prevents chaining losses on the same setup.
+        if self.duckdb_store.recent_sl_hit(self.coin, within_hours=2.0):
+            logger.debug(f"[{self.coin}] SL cooldown active, skipping re-entry")
             return None
 
         # Live strategy params from DB so the Settings UI takes effect immediately.

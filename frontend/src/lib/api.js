@@ -55,10 +55,18 @@ const api = {
     return res.json();
   },
 
-  /** Fetch candles for a given timeframe */
+  /** Fetch candles from DuckDB cache */
   async getCandles(instrument = 'BTC', timeframe = '5m', limit = 500) {
     const params = new URLSearchParams({ instrument, timeframe, limit });
     const res = await fetch(`${API_BASE}/candles?${params}`);
+    return res.json();
+  },
+
+  /** Fetch live candles directly from Hyperliquid (always current) */
+  async getLiveCandles(instrument = 'BTC', timeframe = '4h', limit = 300) {
+    const params = new URLSearchParams({ instrument, timeframe, limit });
+    const res = await fetch(`${API_BASE}/live_candles?${params}`);
+    if (!res.ok) throw new Error(`Live candles failed: ${res.status}`);
     return res.json();
   },
 

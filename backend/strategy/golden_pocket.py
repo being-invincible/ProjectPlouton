@@ -12,6 +12,7 @@ Three filters added per QuantInsti best practices:
      or zone top (SHORT), confirming rejection rather than continuation
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional
 
@@ -19,6 +20,8 @@ import pandas as pd
 
 from backend.config import settings
 from backend.strategy.atr import compute_atr
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -167,16 +170,26 @@ class GoldenPocketStrategy:
         slope_1h = abs(mtf_trend.get("1h", {}).get("slope", 0))
 
         if trend_1h not in ("UP", "DOWN"):
+            logger.debug(f"[{coin}] no trend: 1h={trend_1h}")
             return None
         if slope_1h < settings.min_slope_pct:
+            logger.debug(f"[{coin}] slope too low: {slope_1h:.4f} < {settings.min_slope_pct}")
             return None
 
         direction: Literal["LONG", "SHORT"] = "LONG" if trend_1h == "UP" else "SHORT"
 
         swing = self.detect_swing(df)
         if swing is None:
+            logger.debug(f"[{coin}] no swing detected")
             return None
         if swing.direction != ("UP" if direction == "LONG" else "DOWN"):
+            logger.debug(f"[{coin}] swing direction mismatch: swing={swing.direction} direction={direction}")
+            return None
+
+        # Sanity check: swing range must be positive (pivot detection can occasionally
+        # return high < low when recent price is highly dislocated from the swing).
+        if swing.high <= swing.low:
+            logger.debug(f"[{coin}] invalid swing: high={swing.high:.4f} <= low={swing.low:.4f}")
             return None
 
         last_close = float(df["Close"].iloc[-1])
@@ -185,7 +198,8 @@ class GoldenPocketStrategy:
 
         # ── IMPROVEMENT 1: check both 38.2% and golden pocket zones ──────────
         active_zone: Optional[FibZone] = None
-        for zone in self._zones(swing):
+        zones = self._zones(swing)
+        for zone in zones:
             if direction == "LONG":
                 touched = last_low <= zone.upper and last_low >= zone.lower * 0.98
                 in_zone = zone.lower <= last_close <= zone.upper
@@ -197,6 +211,11 @@ class GoldenPocketStrategy:
                 break
 
         if active_zone is None:
+            gp = zones[0]
+            logger.debug(
+                f"[{coin}] {direction} not in zone: close={last_close:.4f} "
+                f"GP=[{gp.lower:.4f}–{gp.upper:.4f}] swing=[{swing.low:.4f}–{swing.high:.4f}]"
+            )
             return None
 
         # ── IMPROVEMENT 3: bounce confirmation ────────────────────────────────
@@ -204,8 +223,10 @@ class GoldenPocketStrategy:
         # LONG: close must stay at or above zone.lower (wick entered, body rejected)
         # SHORT: close must stay at or below zone.upper
         if direction == "LONG" and last_close < active_zone.lower:
+            logger.debug(f"[{coin}] bounce fail LONG: close={last_close:.4f} < zone.lower={active_zone.lower:.4f}")
             return None
         if direction == "SHORT" and last_close > active_zone.upper:
+            logger.debug(f"[{coin}] bounce fail SHORT: close={last_close:.4f} > zone.upper={active_zone.upper:.4f}")
             return None
 
         atr_series = compute_atr(df, period=settings.atr_period)
@@ -213,6 +234,7 @@ class GoldenPocketStrategy:
 
         swing_range = swing.high - swing.low
         if atr > 0 and swing_range < 1.5 * atr:
+            logger.debug(f"[{coin}] ATR sanity fail: swing_range={swing_range:.4f} < 1.5*ATR={1.5*atr:.4f}")
             return None
 
         # ── IMPROVEMENT 2: RSI gate ───────────────────────────────────────────
@@ -220,8 +242,10 @@ class GoldenPocketStrategy:
         # At a bearish fib level RSI should be elevated (not oversold).
         rsi = self._rsi(df)
         if direction == "LONG" and rsi > 55:
+            logger.debug(f"[{coin}] RSI gate LONG fail: RSI={rsi:.1f} > 55")
             return None
         if direction == "SHORT" and rsi < 45:
+            logger.debug(f"[{coin}] RSI gate SHORT fail: RSI={rsi:.1f} < 45")
             return None
 
         entry = last_close

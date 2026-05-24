@@ -1,16 +1,36 @@
 import { useEffect, useRef, useState } from 'react';
-import { createChart, CandlestickSeries, LineSeries } from 'lightweight-charts';
+import { createChart, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
 import { RefreshCw } from 'lucide-react';
 import api from '../lib/api';
 
+// RSI(14) with simple rolling means — matches the backend SMC strategy's _rsi().
+function computeRSI(closes, period = 14) {
+  const out = new Array(closes.length).fill(null);
+  for (let i = period; i < closes.length; i++) {
+    let avgGain = 0, avgLoss = 0;
+    for (let k = i - period + 1; k <= i; k++) {
+      const diff = closes[k] - closes[k - 1];
+      if (diff > 0) avgGain += diff; else avgLoss += -diff;
+    }
+    avgGain /= period;
+    avgLoss /= period;
+    const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss;
+    out[i] = 100 - 100 / (1 + rs);
+  }
+  return out;
+}
+
+// Levels matched to the TMA Fib Retracement template:
+// 0, 0.382, 0.5, 0.618, 1 + the negative downside extensions (-0.382 / -0.618 / -1.618)
 const FIB_SPECS = [
-  { key: '0',     ratio: 0,     color: '#64748b', lineStyle: 0, width: 1,   label: '0%' },
-  { key: '0.236', ratio: 0.236, color: '#ef5350', lineStyle: 2, width: 1,   label: '23.6%' },
-  { key: '0.382', ratio: 0.382, color: '#ffc107', lineStyle: 2, width: 1,   label: '38.2%' },
-  { key: '0.5',   ratio: 0.5,   color: '#4caf50', lineStyle: 0, width: 1,   label: '50%' },
-  { key: '0.618', ratio: 0.618, color: '#26a69a', lineStyle: 0, width: 1,   label: '61.8%' },
-  { key: '0.786', ratio: 0.786, color: '#2196f3', lineStyle: 2, width: 1,   label: '78.6%' },
-  { key: '1',     ratio: 1,     color: '#64748b', lineStyle: 0, width: 1,   label: '100%' },
+  { key: '-1.618', ratio: -1.618, color: '#22c55e', lineStyle: 2, width: 1, label: '-1.618' },
+  { key: '-0.618', ratio: -0.618, color: '#22c55e', lineStyle: 2, width: 1, label: '-0.618' },
+  { key: '-0.382', ratio: -0.382, color: '#22c55e', lineStyle: 2, width: 1, label: '-0.382' },
+  { key: '0',      ratio: 0,      color: '#94a3b8', lineStyle: 0, width: 1, label: '0' },
+  { key: '0.382',  ratio: 0.382,  color: '#e2e8f0', lineStyle: 2, width: 1, label: '0.382' },
+  { key: '0.5',    ratio: 0.5,    color: '#ffc107', lineStyle: 0, width: 1, label: '0.5' },
+  { key: '0.618',  ratio: 0.618,  color: '#ffc107', lineStyle: 0, width: 1, label: '0.618' },
+  { key: '1',      ratio: 1,      color: '#e2e8f0', lineStyle: 0, width: 1, label: '1' },
 ];
 
 function extractCoin(instrument) {
@@ -23,17 +43,28 @@ export default function FibChart({ trade }) {
   const [candles, setCandles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const coin = extractCoin(trade?.instrument);
 
-  useEffect(() => {
+  function fetchCandles() {
     if (!coin) return;
     setLoading(true);
     setError(null);
-    api.getCandles(coin, '5m', 400)
-      .then(data => setCandles(Array.isArray(data) ? data : []))
-      .catch(() => setError('Failed to load candles'))
+    api.getLiveCandles(coin, '4h', 300)
+      .then(data => {
+        setCandles(Array.isArray(data) ? data : []);
+        setLastUpdated(new Date());
+      })
+      .catch(() => setError('Failed to load live candles'))
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    fetchCandles();
+    // Auto-refresh every 5 minutes to keep chart live
+    const id = setInterval(fetchCandles, 5 * 60 * 1000);
+    return () => clearInterval(id);
   }, [coin]);
 
   useEffect(() => {
@@ -82,6 +113,35 @@ export default function FibChart({ trade }) {
       open: c.open, high: c.high, low: c.low, close: c.close,
     })));
 
+    // ── RSI(14) sub-pane (matches the SMC strategy's RSI gate) ──────────────
+    const closes = candles.map(c => c.close);
+    const rsiVals = computeRSI(closes, 14);
+    const rsiData = candles
+      .map((c, i) => ({ time: Math.floor(new Date(c.timestamp).getTime() / 1000), value: rsiVals[i] }))
+      .filter(d => d.value != null);
+    let rsiSeries = null;
+    if (rsiData.length > 0) {
+      // paneIndex 1 → creates a separate pane below the price chart
+      rsiSeries = chart.addSeries(LineSeries, {
+        color: '#a78bfa', lineWidth: 2,
+        priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
+      }, 1);
+      rsiSeries.setData(rsiData);
+      // Classic overbought / oversold
+      rsiSeries.createPriceLine({ price: 70, color: 'rgba(239,68,68,0.25)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '70' });
+      rsiSeries.createPriceLine({ price: 30, color: 'rgba(16,185,129,0.25)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '30' });
+      rsiSeries.createPriceLine({ price: 50, color: 'rgba(255,255,255,0.12)', lineWidth: 1, lineStyle: 3, axisLabelVisible: false });
+      // SMC gate levels — solid, brighter: above 65 blocks LONGs, below 35 blocks SHORTs
+      rsiSeries.createPriceLine({ price: 65, color: '#ef4444', lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: 'LONG block 65' });
+      rsiSeries.createPriceLine({ price: 35, color: '#10b981', lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: 'SHORT block 35' });
+      // Keep the price pane dominant, RSI compact
+      try {
+        const panes = chart.panes();
+        if (panes[0]) panes[0].setHeight(280);
+        if (panes[1]) panes[1].setHeight(90);
+      } catch (_) { /* setHeight optional across builds */ }
+    }
+
     // Standard Fib retracement lines (from swing_low upward)
     for (const fib of FIB_SPECS) {
       const price = swing_low + fib.ratio * rng;
@@ -116,17 +176,34 @@ export default function FibChart({ trade }) {
       to: Math.min(candles.length + 20, pivot + 40),
     });
 
-    // Entry marker
+    // Entry marker on the price chart (v5 API)
     if (entryTs && entry_price) {
       try {
-        candleSeries.setMarkers([{
+        createSeriesMarkers(candleSeries, [{
           time: entryTs,
           position: direction === 'LONG' ? 'belowBar' : 'aboveBar',
           color: '#3b82f6',
           shape: direction === 'LONG' ? 'arrowUp' : 'arrowDown',
           text: 'Entry',
         }]);
-      } catch (_) { /* setMarkers optional — skip if not available in this build */ }
+      } catch (_) { /* markers optional across builds */ }
+
+      // Matching marker on the RSI line at the entry bar, labelled with the
+      // RSI the bot recorded at entry (trade.rsi) — falls back to chart-computed.
+      if (rsiSeries) {
+        const entryRsi = trade.rsi != null
+          ? Number(trade.rsi)
+          : (rsiData.find(d => d.time >= entryTs)?.value ?? null);
+        try {
+          createSeriesMarkers(rsiSeries, [{
+            time: entryTs,
+            position: direction === 'LONG' ? 'belowBar' : 'aboveBar',
+            color: '#a78bfa',
+            shape: 'circle',
+            text: entryRsi != null ? `RSI ${entryRsi.toFixed(1)}` : 'Entry',
+          }]);
+        } catch (_) { /* markers optional across builds */ }
+      }
     }
 
     chartRef.current = chart;
@@ -147,11 +224,19 @@ export default function FibChart({ trade }) {
   if (loading) return (
     <div style={{ height: 360, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#475569' }}>
       <RefreshCw style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} />
-      <span style={{ fontSize: 13 }}>Loading candles…</span>
+      <span style={{ fontSize: 13 }}>Loading live candles…</span>
     </div>
   );
 
-  if (error) return <div style={{ padding: 20, color: '#ef4444', fontSize: 13 }}>{error}</div>;
+  if (error) return (
+    <div style={{ padding: 20, color: '#ef4444', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+      {error}
+      <button onClick={fetchCandles} style={{
+        padding: '4px 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+        background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444',
+      }}>Retry</button>
+    </div>
+  );
 
   if (!trade.swing_high || !trade.swing_low) return (
     <div style={{ padding: 20, color: '#64748b', fontSize: 13 }}>
@@ -184,7 +269,27 @@ export default function FibChart({ trade }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div ref={containerRef} style={{ height: 360 }} />
+
+      {/* Live badge + manual refresh */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, padding: '0 16px' }}>
+        <span style={{ fontSize: 10, color: '#475569' }}>
+          4h · {lastUpdated ? `updated ${lastUpdated.toLocaleTimeString()}` : ''}
+        </span>
+        <span style={{
+          fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+          background: 'rgba(16,185,129,0.1)', color: '#10b981',
+          border: '1px solid rgba(16,185,129,0.2)',
+        }}>● LIVE</span>
+        <button onClick={fetchCandles} title="Refresh" style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          padding: '4px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
+          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#64748b',
+        }}>
+          <RefreshCw style={{ width: 12, height: 12 }} /> Refresh
+        </button>
+      </div>
+
+      <div ref={containerRef} style={{ height: 400 }} />
 
       {/* Legend table */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, fontSize: 11 }}>

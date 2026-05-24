@@ -12,6 +12,8 @@ from backend.config import settings
 from backend.data.duckdb_store import DuckDBStore
 from backend.data.hyperliquid_fetcher import HyperliquidFetcher
 from backend.strategy.golden_pocket import GoldenPocketStrategy
+from backend.strategy.smc import SMCStrategy
+from backend.strategy.fib_golden_zone import FibGoldenZoneStrategy
 from backend.engine.confidence_scorer import ConfidenceScorer
 from backend.engine.position_sizer import PositionSizer
 from backend.engine.quality_filter import QualityFilter
@@ -27,6 +29,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# Show per-coin filter reasons from the strategy
+logging.getLogger("backend.strategy.golden_pocket").setLevel(logging.DEBUG)
 logger = logging.getLogger("Plouton")
 
 
@@ -46,7 +50,17 @@ class TradingBot:
         self._duckdb_store = DuckDBStore(db_path)
 
         fetcher = HyperliquidFetcher()
-        strategy = GoldenPocketStrategy()
+        if settings.strategy_name == "smc":
+            strategy = SMCStrategy()
+            logging.getLogger("backend.strategy.smc").setLevel(logging.DEBUG)
+            logger.info("Strategy: SMC (BOS/CHoCH + FVG/OB + Liquidity)")
+        elif settings.strategy_name in ("fibgz", "fib_golden_zone"):
+            strategy = FibGoldenZoneStrategy()
+            logging.getLogger("backend.strategy.fib_golden_zone").setLevel(logging.DEBUG)
+            logger.info("Strategy: Fib Golden Zone (fractal swings + EMA/swap confluence + engulfing)")
+        else:
+            strategy = GoldenPocketStrategy()
+            logger.info("Strategy: Golden Pocket (Fibonacci retracement)")
         scorer = ConfidenceScorer()
         sizer = PositionSizer(risk_per_trade_pct=settings.risk_per_trade_pct)
         qf = QualityFilter(

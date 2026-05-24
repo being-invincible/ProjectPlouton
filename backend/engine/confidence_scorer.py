@@ -24,9 +24,9 @@ class ConfidenceScorer:
         score += self._ema_confluence(df, signal) * self.W_EMA
         score += self._atr_sanity(signal) * self.W_ATR_SANE
         score += self._rsi_score(signal) * self.W_RSI
-        # GP zone scores higher than 38.2% (deeper retracement = stronger support)
+        # GP zone scores slightly higher than 38.2% (deeper retracement = stronger support)
         if getattr(signal, "fib_zone_name", "GP") == "38.2":
-            score *= 0.92
+            score *= 0.96
         return max(0.0, min(95.0, score))
 
     def _mtf_alignment(self, mtf: dict, direction: str) -> float:
@@ -36,30 +36,39 @@ class ConfidenceScorer:
         tf_1h = mtf.get("1h", {}).get("trend")
         tf_4h = mtf.get("4h", {}).get("trend")
 
-        # 1h drives direction — must align.
-        if tf_1h != wanted:
-            return 0.0
+        # If neither VMA trend agrees, the strategy already validated structure
+        # (BOS/CHoCH or GP zone). Give a small base — the VMA is lagging.
+        if tf_1h != wanted and tf_4h != wanted:
+            if tf_1d == wanted:
+                return 0.4   # macro agrees even if 1h/4h VMA lag
+            return 0.25      # counter-trend or VMA stale — minimal credit
 
-        # Start from base score based on 4h posture.
-        # Ideal: 1h trending, 4h retracing INTO fib zone (pullback entry).
-        if tf_4h == opposite:
-            base = 1.0    # textbook retracement setup
+        # Two ideal patterns:
+        #   GP:  1h trending in direction + 4h pulling back (retracement entry)
+        #   SMC: 4h breaking structure in direction + 1h pulling back into FVG
+        if (tf_1h == wanted and tf_4h == opposite) or (tf_4h == wanted and tf_1h == opposite):
+            base = 1.0    # textbook pullback / SMC FVG retracement
+        elif tf_1h == wanted and tf_4h == wanted:
+            base = 0.75   # momentum continuation
         elif tf_4h == wanted:
-            base = 0.75   # momentum continuation — less ideal
+            base = 0.70   # 4h agrees, 1h neutral
         else:
-            base = 0.6    # 4h unknown / neutral
+            base = 0.60   # 1h agrees, 4h neutral
 
-        # 1d alignment is a confidence MULTIPLIER, not a blocker.
-        # Aligned = with the macro trend (best case).
-        # Opposite = counter-trend trade (valid but lower score).
+        # 1d is a confidence MULTIPLIER only — not a blocker.
         if tf_1d == wanted:
-            return base           # macro agrees — full score
+            return base
         elif tf_1d == opposite:
-            return base * 0.75   # counter-trend short/long — reduce confidence
-        return base * 0.9        # 1d unknown (new data) — slight discount
+            return base * 0.75
+        return base * 0.9
 
     def _slope_strength(self, mtf: dict) -> float:
-        slope = abs(mtf.get("1h", {}).get("slope", 0.0))
+        # At a fib retracement, 1h slope is naturally flat (that's the pullback).
+        # Use the strongest slope across timeframes: 1d measures macro trend,
+        # 1h measures entry momentum. Either a strong macro or 1h trend earns points.
+        slope_1d = abs(mtf.get("1d", {}).get("slope", 0.0))
+        slope_1h = abs(mtf.get("1h", {}).get("slope", 0.0))
+        slope = max(slope_1d, slope_1h)
         if slope < 0.002:
             return 0.0
         if slope >= 0.01:

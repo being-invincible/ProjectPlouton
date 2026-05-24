@@ -356,11 +356,29 @@ async def get_candles(
     )
     if df.empty:
         return []
-    # Convert to list of dicts with standard column names
     df = df.reset_index()
     df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
     records = df.to_dict("records")
     return _clean(records)
+
+
+@app.get("/api/live_candles")
+async def get_live_candles(
+    instrument: str = "BTC",
+    timeframe: str = "4h",
+    limit: int = 300,
+):
+    """Fetch candles live from Hyperliquid — always current, bypasses DuckDB cache."""
+    from backend.data.hyperliquid_fetcher import HyperliquidFetcher
+    try:
+        fetcher = HyperliquidFetcher()
+        df = fetcher.fetch_ohlcv(instrument, timeframe=timeframe, limit=limit)
+        df = df.reset_index()
+        df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+        records = df.to_dict("records")
+        return _clean(records)
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
 
 
 # ── Trades ───────────────────────────────────────────────────────
@@ -541,16 +559,23 @@ async def get_monitor():
     store = get_store()
     coins = bot_settings.coins
 
+    # The bot scans on its execution timeframe (4h by default), not 5m.
+    exec_tf = bot_settings.execution_tf_default
+    # The heartbeat updates every cycle, so it's the truthful "last scan" time
+    # (the newest candle timestamp can be up to one TF-period old).
+    state = store.get_bot_state() or {}
+    heartbeat = state.get("last_heartbeat") or state.get("last_updated")
+
     result = []
     for coin in coins:
-        # Last 5m candle = proxy for last scan time
+        # Last execution-TF candle = proxy for last scan time
         last_candle = store.conn.execute(
-            "SELECT MAX(timestamp) FROM candles WHERE instrument = ? AND timeframe = '5m'",
-            [coin],
+            "SELECT MAX(timestamp) FROM candles WHERE instrument = ? AND timeframe = ?",
+            [coin, exec_tf],
         ).fetchone()
         candle_count = store.conn.execute(
-            "SELECT COUNT(*) FROM candles WHERE instrument = ? AND timeframe = '5m'",
-            [coin],
+            "SELECT COUNT(*) FROM candles WHERE instrument = ? AND timeframe = ?",
+            [coin, exec_tf],
         ).fetchone()[0]
 
         # Latest signal
@@ -566,13 +591,13 @@ async def get_monitor():
 
         # Latest close price
         price_row = store.conn.execute(
-            "SELECT close FROM candles WHERE instrument = ? AND timeframe = '5m' ORDER BY timestamp DESC LIMIT 1",
-            [coin],
+            "SELECT close FROM candles WHERE instrument = ? AND timeframe = ? ORDER BY timestamp DESC LIMIT 1",
+            [coin, exec_tf],
         ).fetchone()
 
         result.append(_clean({
             "coin": coin,
-            "last_scan": last_candle[0] if last_candle else None,
+            "last_scan": heartbeat if candle_count > 0 else (last_candle[0] if last_candle else None),
             "candle_count": candle_count,
             "last_signal_time": sig_row[0] if sig_row else None,
             "last_signal_direction": sig_row[1] if sig_row else None,

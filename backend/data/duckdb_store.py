@@ -765,6 +765,20 @@ class DuckDBStore:
             return []
         return df.to_dict("records")
 
+    def recent_sl_hit(self, instrument: str, within_hours: float = 2.0) -> bool:
+        """Return True if this coin had an SL exit within the last `within_hours`."""
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) FROM trades
+            WHERE instrument = ?
+              AND status = 'CLOSED'
+              AND (exit_reason ILIKE '%SL%' OR exit_reason ILIKE '%STOP%')
+              AND exit_timestamp >= now() - INTERVAL (? || ' hours')
+            """,
+            [instrument, str(within_hours)],
+        ).fetchone()
+        return bool(row and row[0] > 0)
+
     def list_all_trades(self) -> list[dict]:
         """Return all trades as list of dicts."""
         df = self.conn.execute("SELECT * FROM trades ORDER BY timestamp").fetchdf()
